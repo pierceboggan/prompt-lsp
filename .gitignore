@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Build output
+out/
+client/out/
+*.js.map
+*.d.ts.map
+
+# VS Code
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# Test coverage
+coverage/
+
+# Package locks (optional - uncomment if you want to ignore)
+# package-lock.json
+# client/package-lock.json
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

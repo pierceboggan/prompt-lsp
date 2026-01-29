@@ -1,0 +1,139 @@
+{
+  "name": "prompt-lsp-client",
+  "displayName": "Prompt LSP",
+  "description": "Language Server Protocol implementation for analyzing, validating, and improving AI prompts",
+  "version": "0.1.0",
+  "publisher": "prompt-lsp",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "ai",
+    "prompt",
+    "llm",
+    "chatgpt",
+    "claude",
+    "prompt engineering"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "prompt",
+        "aliases": [
+          "AI Prompt",
+          "prompt"
+        ],
+        "extensions": [
+          ".prompt.md",
+          ".system.md",
+          ".agent.md",
+          ".prompt"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "prompt",
+        "scopeName": "text.prompt",
+        "path": "./syntaxes/prompt.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Prompt LSP",
+      "properties": {
+        "promptLSP.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable the Prompt LSP extension"
+        },
+        "promptLSP.enableLLMAnalysis": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable LLM-powered analysis (requires API key)"
+        },
+        "promptLSP.llmProvider": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "anthropic"
+          ],
+          "default": "openai",
+          "description": "LLM provider for semantic analysis"
+        },
+        "promptLSP.llmModel": {
+          "type": "string",
+          "default": "gpt-4",
+          "description": "Model to use for LLM analysis"
+        },
+        "promptLSP.maxTokenBudget": {
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum token budget to warn about"
+        },
+        "promptLSP.targetModel": {
+          "type": "string",
+          "enum": [
+            "gpt-4",
+            "gpt-3.5-turbo",
+            "claude-3",
+            "claude-2",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "Target model for compatibility checks"
+        },
+        "promptLSP.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "promptLSP.analyzePrompt",
+        "title": "Analyze Prompt",
+        "category": "Prompt LSP"
+      },
+      {
+        "command": "promptLSP.showTokenCount",
+        "title": "Show Token Count",
+        "category": "Prompt LSP"
+      },
+      {
+        "command": "promptLSP.clearCache",
+        "title": "Clear Analysis Cache",
+        "category": "Prompt LSP"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^18.x",
+    "typescript": "^5.0.0"
+  }
+}
