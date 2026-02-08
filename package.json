@@ -8,7 +8,7 @@
     "watch": "tsc -watch -p ./",
     "build": "npm run compile && cd client && npm run compile",
     "build:all": "npm run compile && cd client && npm install && npm run compile",
-    "test": "echo \"Tests not yet implemented\" && exit 0",
+    "test": "vitest run",
     "clean": "rm -rf out && cd client && rm -rf out",
     "preinstall": "cd client && npm install"
   },
@@ -31,6 +31,7 @@
   "devDependencies": {
     "@types/crypto-js": "^4.2.2",
     "@types/node": "^25.1.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   }
 }
