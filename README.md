@@ -40,8 +40,6 @@ npm install
 npm run build
 ```
 
-## Quick Start
-
 ## Usage
 
 ### VS Code Extension
