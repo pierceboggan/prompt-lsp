@@ -56,28 +56,6 @@
           "default": true,
           "description": "Enable/disable the Prompt LSP extension"
         },
-        "promptLSP.enableLLMAnalysis": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable LLM-powered analysis via GitHub Copilot"
-        },
-        "promptLSP.maxTokenBudget": {
-          "type": "number",
-          "default": 4096,
-          "description": "Maximum token budget to warn about"
-        },
-        "promptLSP.targetModel": {
-          "type": "string",
-          "enum": [
-            "gpt-4",
-            "gpt-3.5-turbo",
-            "claude-3",
-            "claude-2",
-            "auto"
-          ],
-          "default": "auto",
-          "description": "Target model for compatibility checks"
-        },
         "promptLSP.trace.server": {
           "type": "string",
           "enum": [

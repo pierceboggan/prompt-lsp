@@ -20,6 +20,9 @@ export interface CompositionLink {
   line: number;
   column: number;
   endColumn: number;
+  /** Column range for the link target inside parentheses: (target) */
+  targetStartColumn?: number;
+  targetEndColumn?: number;
 }
 
 export interface Section {
@@ -80,6 +83,8 @@ export interface TokenInfo {
   totalTokens: number;
   sections: Map<string, number>;
   budgetWarning?: string;
+  /** Token counts aligned with doc.sections order (avoids collisions on duplicate section names). */
+  sectionTokens?: number[];
 }
 
 export interface LLMAnalysisRequest {

@@ -14,17 +14,25 @@ import {
   HoverParams,
   Hover,
   MarkupKind,
+  CodeLens,
+  Location,
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 
 import { StaticAnalyzer } from './analyzers/static';
 import { LLMAnalyzer } from './analyzers/llm';
 import { AnalysisCache } from './cache';
 import { PromptDocument, PromptFileType, AnalysisResult, CompositionLink, LLMProxyRequest, LLMProxyResponse } from './types';
+import {
+  createCodeLenses,
+  findCompositionLinkAtPosition,
+  findFirstVariableOccurrence,
+  getVariableNameAtPosition,
+} from './lspFeatures';
 
 // Create a connection for the server
 const connection = createConnection(ProposedFeatures.all);
@@ -44,15 +52,14 @@ const recentlyOpened: Set<string> = new Set();
 const DEBOUNCE_DELAY = 500; // ms
 const LLM_DEBOUNCE_DELAY = 2000; // ms - longer delay for LLM to avoid excessive API calls
 
-let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
+
+// Store last STATIC analysis results per URI for CodeLens issue summary
+const lastStaticAnalysisResults: Map<string, AnalysisResult[]> = new Map();
 
 connection.onInitialize((params: InitializeParams) => {
   const capabilities = params.capabilities;
 
-  hasConfigurationCapability = !!(
-    capabilities.workspace && !!capabilities.workspace.configuration
-  );
   hasWorkspaceFolderCapability = !!(
     capabilities.workspace && !!capabilities.workspace.workspaceFolders
   );
@@ -68,6 +75,10 @@ connection.onInitialize((params: InitializeParams) => {
       },
       // Document symbols for outline
       documentSymbolProvider: true,
+      // Go to Definition for variables and composition links
+      definitionProvider: true,
+      // CodeLens for token counts and issue summary
+      codeLensProvider: { resolveProvider: false },
     },
   };
 
@@ -106,18 +117,7 @@ connection.onInitialized(() => {
     }
   });
 
-  // Fetch initial configuration
-  updateConfiguration();
 });
-
-// Watch for configuration changes
-connection.onDidChangeConfiguration(() => {
-  updateConfiguration();
-});
-
-async function updateConfiguration(): Promise<void> {
-  // No LLM-specific config needed — Copilot is auto-detected via vscode.lm
-}
 
 // Handle document changes - static analysis immediately, LLM analysis after pause
 documents.onDidChangeContent((change) => {
@@ -173,6 +173,8 @@ async function runStaticAnalysis(textDocument: TextDocument): Promise<void> {
   const promptDoc = parsePromptDocument(textDocument);
   const staticResults = staticAnalyzer.analyze(promptDoc);
 
+  lastStaticAnalysisResults.set(textDocument.uri, staticResults);
+
   const diagnostics = resultsTodiagnostics(staticResults);
   connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
@@ -181,6 +183,8 @@ async function runStaticAnalysis(textDocument: TextDocument): Promise<void> {
 async function runDebouncedAnalysis(textDocument: TextDocument): Promise<void> {
   const promptDoc = parsePromptDocument(textDocument);
   const staticResults = staticAnalyzer.analyze(promptDoc);
+
+  lastStaticAnalysisResults.set(textDocument.uri, staticResults);
 
   const diagnostics = resultsTodiagnostics(staticResults);
   connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
@@ -196,6 +200,8 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
   const cachedResults = cache.get(contentHash);
   if (cachedResults) {
     connection.console.log('[Analysis] Using cached results');
+    // Refresh static-only results for CodeLens issue summary.
+    lastStaticAnalysisResults.set(textDocument.uri, staticAnalyzer.analyze(promptDoc));
     const diagnostics = resultsTodiagnostics(cachedResults);
     connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
     return;
@@ -205,6 +211,9 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
   const staticResults = staticAnalyzer.analyze(promptDoc);
   connection.console.log(`[Analysis] Static: ${staticResults.length} issues`);
 
+  // Store static results for CodeLens issue summary
+  lastStaticAnalysisResults.set(textDocument.uri, staticResults);
+
   // Run LLM analysis
   connection.console.log(`[Analysis] LLM available: ${llmAnalyzer.isAvailable()}`);
   const llmResults = await llmAnalyzer.analyze(promptDoc);
@@ -212,6 +221,8 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
 
   // Combine results
   const allResults = [...staticResults, ...llmResults];
+  
+  // Intentionally do not store combined results for CodeLens; summary uses last static analysis.
 
   // Cache results
   cache.set(contentHash, allResults);
@@ -302,12 +313,17 @@ function parsePromptDocument(textDocument: TextDocument): PromptDocument {
       if (!isPromptFile(targetWithoutAnchor)) continue;
 
       const resolvedPath = resolveLinkPath(targetWithoutAnchor, documentDir);
+      const openParenOffset = match[0].indexOf('(');
+      const targetStartColumn = match.index + (openParenOffset >= 0 ? openParenOffset + 1 : 0);
+      const targetEndColumn = targetStartColumn + match[2].length;
       compositionLinks.push({
         target: targetWithoutAnchor,
         resolvedPath,
         line: lineIndex,
         column: match.index,
         endColumn: match.index + match[0].length,
+        targetStartColumn,
+        targetEndColumn,
       });
     }
   });
@@ -479,6 +495,59 @@ function resultsTodiagnostics(results: AnalysisResult[]): Diagnostic[] {
     };
   });
 }
+
+// Go to Definition for variables and composition links
+connection.onDefinition((params) => {
+  const document = documents.get(params.textDocument.uri);
+  if (!document) return null;
+
+  const promptDoc = parsePromptDocument(document);
+  const position = params.position;
+  const lineText = promptDoc.lines[position.line] ?? '';
+
+  // Check if cursor is on a {{variable}}
+  const variableName = getVariableNameAtPosition(lineText, position.character);
+  if (variableName) {
+    const occurrence = findFirstVariableOccurrence(promptDoc, variableName);
+    if (occurrence) {
+      return Location.create(params.textDocument.uri, {
+        start: { line: occurrence.line, character: occurrence.character },
+        end: { line: occurrence.line, character: occurrence.character + occurrence.length },
+      });
+    }
+  }
+
+  // Check if cursor is on a composition link target (inside parentheses)
+  const link = findCompositionLinkAtPosition(promptDoc, position.line, position.character);
+  if (link?.resolvedPath) {
+    try {
+      fs.accessSync(link.resolvedPath, fs.constants.R_OK);
+      const targetUri = pathToFileURL(link.resolvedPath).toString();
+      return Location.create(targetUri, {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 0 },
+      });
+    } catch {
+      // Missing/unreadable links are handled by diagnostics
+    }
+  }
+
+  return null;
+});
+
+// CodeLens for token counts and issue summary
+connection.onCodeLens((params) => {
+  const document = documents.get(params.textDocument.uri);
+  if (!document) return [];
+
+  const promptDoc = parsePromptDocument(document);
+
+  return createCodeLenses(
+    promptDoc,
+    lastStaticAnalysisResults.get(params.textDocument.uri),
+    staticAnalyzer,
+  );
+});
 
 // Hover provider for detailed explanations
 connection.onHover((params: HoverParams): Hover | null => {

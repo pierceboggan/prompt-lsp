@@ -286,4 +286,56 @@ describe('StaticAnalyzer', () => {
       }
     });
   });
+
+  describe('getTokenInfo', () => {
+    it('should return total token count', () => {
+      const doc = makeDoc('Hello world, this is a test document.');
+      const info = analyzer.getTokenInfo(doc);
+      expect(info.totalTokens).toBeGreaterThan(0);
+    });
+
+    it('should return per-section token counts', () => {
+      const doc = makeDoc(
+        '# Introduction\n\nThis is the intro section.\n\n' +
+        '# Rules\n\nThese are the rules for the assistant.\n\n' +
+        '# Examples\n\nHere is an example.'
+      );
+      const info = analyzer.getTokenInfo(doc);
+      expect(info.sections.size).toBe(3);
+      expect(info.sections.has('Introduction')).toBe(true);
+      expect(info.sections.has('Rules')).toBe(true);
+      expect(info.sections.has('Examples')).toBe(true);
+      for (const [, tokens] of info.sections) {
+        expect(tokens).toBeGreaterThan(0);
+      }
+    });
+
+    it('should return empty sections map when no headers present', () => {
+      const doc = makeDoc('Just some plain text without headers.');
+      const info = analyzer.getTokenInfo(doc);
+      expect(info.sections.size).toBe(0);
+      expect(info.totalTokens).toBeGreaterThan(0);
+    });
+
+    it('should set budget warning for large prompts', () => {
+      const longText = 'This is a test sentence for token budget checking. '.repeat(500);
+      const doc = makeDoc(longText);
+      const info = analyzer.getTokenInfo(doc, 'gpt-3.5-turbo');
+      expect(info.budgetWarning).toBeDefined();
+    });
+  });
+
+  describe('getTokenCount', () => {
+    it('should count tokens accurately', () => {
+      const count = analyzer.getTokenCount('Hello, world!');
+      expect(count).toBeGreaterThan(0);
+      expect(count).toBeLessThan(20);
+    });
+
+    it('should return higher count for longer text', () => {
+      const short = analyzer.getTokenCount('Hello');
+      const long = analyzer.getTokenCount('Hello world, this is a much longer sentence with many more tokens.');
+      expect(long).toBeGreaterThan(short);
+    });
+  });
 });

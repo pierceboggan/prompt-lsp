@@ -76,11 +76,14 @@ export class StaticAnalyzer {
   getTokenInfo(doc: PromptDocument, targetModel?: string): TokenInfo {
     const totalTokens = this.getTokenCount(doc.text, targetModel);
     const sections = new Map<string, number>();
+    const sectionTokens: number[] = [];
     
     // Calculate tokens per section
     for (const section of doc.sections) {
       const sectionText = doc.lines.slice(section.startLine, section.endLine + 1).join('\n');
-      sections.set(section.name, this.getTokenCount(sectionText, targetModel));
+      const count = this.getTokenCount(sectionText, targetModel);
+      sectionTokens.push(count);
+      sections.set(section.name, count);
     }
 
     const contextWindow = this.contextWindows[targetModel || 'gpt-4'] || 8192;
@@ -92,7 +95,7 @@ export class StaticAnalyzer {
       budgetWarning = `Prompt uses ${totalTokens} tokens (${Math.round(totalTokens / contextWindow * 100)}% of context window)`;
     }
 
-    return { totalTokens, sections, budgetWarning };
+    return { totalTokens, sections, budgetWarning, sectionTokens };
   }
 
   analyze(doc: PromptDocument): AnalysisResult[] {
