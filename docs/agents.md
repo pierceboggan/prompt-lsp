@@ -139,3 +139,5 @@ When Prompt LSP analyzes your agent prompt, you may see these codes:
 ## Example: Complete Agent Prompt
 
 See [`examples/sample.prompt.md`](../examples/sample.prompt.md) for a well-structured agent prompt, and [`examples/problematic.agent.md`](../examples/problematic.agent.md) for a prompt that triggers many diagnostics.
+
+For a before/after comparison showing how to improve an agent prompt by adding self-verification, see [`examples/skill-improvement.agent.md`](../examples/skill-improvement.agent.md).
