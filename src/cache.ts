@@ -8,10 +8,14 @@ import { AnalysisResult, CacheEntry } from './types';
 export class AnalysisCache {
   private cache: Map<string, CacheEntry> = new Map();
   private defaultTTL: number = 3600000; // 1 hour in ms
+  private maxEntries: number = 100;
 
-  constructor(ttlMs?: number) {
+  constructor(ttlMs?: number, maxEntries?: number) {
     if (ttlMs) {
       this.defaultTTL = ttlMs;
+    }
+    if (maxEntries) {
+      this.maxEntries = maxEntries;
     }
   }
 
@@ -45,6 +49,14 @@ export class AnalysisCache {
    * Store results in cache
    */
   set(hash: string, results: AnalysisResult[], ttl?: number): void {
+    // Auto-prune expired entries and enforce max size
+    this.prune();
+    while (this.cache.size >= this.maxEntries) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey !== undefined) this.cache.delete(oldestKey);
+      else break;
+    }
+
     this.cache.set(hash, {
       hash,
       results,

@@ -51,17 +51,8 @@ export class LLMAnalyzer {
     const results: AnalysisResult[] = [];
 
     try {
-      // Run all LLM-based analyses in parallel
-      const [
-        contradictions,
-        ambiguities,
-        personaIssues,
-        safetyIssues,
-        cognitiveLoad,
-        outputShape,
-        semanticCoverage,
-        compositionConflicts,
-      ] = await Promise.all([
+      // Run all LLM-based analyses in parallel (allSettled to preserve partial results)
+      const settled = await Promise.allSettled([
         this.analyzeContradictions(doc),
         this.analyzeAmbiguity(doc),
         this.analyzePersonaConsistency(doc),
@@ -72,14 +63,11 @@ export class LLMAnalyzer {
         this.analyzeCompositionConflicts(doc),
       ]);
 
-      results.push(...contradictions);
-      results.push(...ambiguities);
-      results.push(...personaIssues);
-      results.push(...safetyIssues);
-      results.push(...cognitiveLoad);
-      results.push(...outputShape);
-      results.push(...semanticCoverage);
-      results.push(...compositionConflicts);
+      for (const result of settled) {
+        if (result.status === 'fulfilled') {
+          results.push(...result.value);
+        }
+      }
     } catch (error) {
       results.push({
         code: 'llm-error',
@@ -109,9 +97,9 @@ export class LLMAnalyzer {
 5. Scope ambiguity or unclear precedence
 
 Prompt to analyze:
-"""
+<prompt_to_analyze>
 ${doc.text}
-"""
+</prompt_to_analyze>
 
 Respond in JSON format:
 {
@@ -164,9 +152,9 @@ If no issues found, return {"issues": []}`;
 3. Format conflicts (e.g., "respond in exactly 10 words" + "include a code block")
 
 Prompt to analyze:
-"""
+<prompt_to_analyze>
 ${doc.text}
-"""
+</prompt_to_analyze>
 
 Respond in JSON format:
 {
@@ -236,9 +224,9 @@ If no contradictions found, return {"contradictions": []}`;
 3. Implied characteristics that clash with stated behavior
 
 Prompt to analyze:
-"""
+<prompt_to_analyze>
 ${doc.text}
-"""
+</prompt_to_analyze>
 
 Respond in JSON format:
 {
@@ -292,9 +280,9 @@ If no issues found, return {"issues": []}`;
 4. Safety rules using weak language
 
 Prompt to analyze:
-"""
+<prompt_to_analyze>
 ${doc.text}
-"""
+</prompt_to_analyze>
 
 Respond in JSON format:
 {
@@ -350,9 +338,9 @@ If no vulnerabilities found, return {"vulnerabilities": []}`;
 4. Too many constraints fighting for attention
 
 Prompt to analyze:
-"""
+<prompt_to_analyze>
 ${doc.text}
-"""
+</prompt_to_analyze>
 
 Respond in JSON format:
 {
@@ -418,9 +406,9 @@ Respond in JSON format:
 4. Format compliance probability (will output match specified format)
 
 Prompt to analyze:
-"""
+<prompt_to_analyze>
 ${doc.text}
-"""
+</prompt_to_analyze>
 
 Respond in JSON format:
 {
@@ -543,9 +531,9 @@ Respond in JSON format:
 4. What situations might produce undefined behavior?
 
 Prompt to analyze:
-"""
+<prompt_to_analyze>
 ${doc.text}
-"""
+</prompt_to_analyze>
 
 Respond in JSON format:
 {
@@ -650,7 +638,7 @@ Respond in JSON format:
       return [];
     }
 
-    const composedText = this.buildComposedText(doc);
+    const composedText = await this.buildComposedText(doc);
     if (!composedText) {
       return [];
     }
@@ -661,9 +649,9 @@ Respond in JSON format:
 3. Priority conflicts (two sections both claiming highest priority)
 
 Composed prompt:
-"""
+<prompt_to_analyze>
 ${composedText}
-"""
+</prompt_to_analyze>
 
 Respond in JSON format:
 {
@@ -705,13 +693,13 @@ If no conflicts found, return {"conflicts": []}`;
     return results;
   }
 
-  private buildComposedText(doc: PromptDocument): string {
+  private async buildComposedText(doc: PromptDocument): Promise<string> {
     const parts: string[] = [doc.text];
 
     for (const link of doc.compositionLinks) {
       if (!link.resolvedPath) continue;
       try {
-        const linkedText = fs.readFileSync(link.resolvedPath, 'utf8');
+        const linkedText = await fs.promises.readFile(link.resolvedPath, 'utf8');
         parts.push(`\n\n--- begin ${link.target} ---\n${linkedText}\n--- end ${link.target} ---\n`);
       } catch {
         // Missing/unreadable files handled by static analyzer

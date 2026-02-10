@@ -46,12 +46,26 @@ const llmAnalyzer = new LLMAnalyzer();
 const cache = new AnalysisCache();
 
 // Debounce timers for analysis
-const debounceTimers: Map<string, NodeJS.Timeout> = new Map();
 const llmDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
 const recentlyOpened: Set<string> = new Set();
-const DEBOUNCE_DELAY = 500; // ms
+const documentVersions: Map<string, number> = new Map();
 const LLM_DEBOUNCE_DELAY = 2000; // ms - longer delay for LLM to avoid excessive API calls
 
+let workspaceRoot: string | undefined;
+
+interface ServerConfig {
+  enableLLMAnalysis: boolean;
+  maxTokenBudget: number;
+  targetModel: string;
+}
+
+let serverConfig: ServerConfig = {
+  enableLLMAnalysis: true,
+  maxTokenBudget: 4096,
+  targetModel: 'auto',
+};
+
+let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 
 // Store last STATIC analysis results per URI for CodeLens issue summary
@@ -60,13 +74,27 @@ const lastStaticAnalysisResults: Map<string, AnalysisResult[]> = new Map();
 connection.onInitialize((params: InitializeParams) => {
   const capabilities = params.capabilities;
 
+  hasConfigurationCapability = !!(
+    capabilities.workspace && !!capabilities.workspace.configuration
+  );
   hasWorkspaceFolderCapability = !!(
     capabilities.workspace && !!capabilities.workspace.workspaceFolders
   );
 
+  // Capture workspace root for path traversal validation
+  if (params.rootUri) {
+    try { workspaceRoot = fileURLToPath(params.rootUri); } catch { /* ignore */ }
+  } else if (params.workspaceFolders && params.workspaceFolders.length > 0) {
+    try { workspaceRoot = fileURLToPath(params.workspaceFolders[0].uri); } catch { /* ignore */ }
+  }
+
   const result: InitializeResult = {
     capabilities: {
-      textDocumentSync: TextDocumentSyncKind.Incremental,
+      textDocumentSync: {
+        openClose: true,
+        change: TextDocumentSyncKind.Incremental,
+        save: { includeText: false },
+      },
       // Hover provider for detailed explanations
       hoverProvider: true,
       // Code actions for quick fixes
@@ -117,39 +145,51 @@ connection.onInitialized(() => {
     }
   });
 
+  // Fetch initial configuration
+  updateConfiguration();
 });
+
+// Watch for configuration changes
+connection.onDidChangeConfiguration(() => {
+  updateConfiguration();
+});
+
+async function updateConfiguration(): Promise<void> {
+  if (!hasConfigurationCapability) return;
+  try {
+    const config = await connection.workspace.getConfiguration('promptLSP');
+    if (config) {
+      serverConfig = {
+        enableLLMAnalysis: config.enableLLMAnalysis ?? true,
+        maxTokenBudget: config.maxTokenBudget ?? 4096,
+        targetModel: config.targetModel ?? 'auto',
+      };
+    }
+  } catch {
+    // Configuration not available
+  }
+}
 
 // Handle document changes - static analysis immediately, LLM analysis after pause
 documents.onDidChangeContent((change) => {
   const uri = change.document.uri;
 
-  // Cancel existing debounce timers
-  const existingTimer = debounceTimers.get(uri);
-  if (existingTimer) {
-    clearTimeout(existingTimer);
-  }
+  // Cancel existing LLM debounce timer
   const existingLLMTimer = llmDebounceTimers.get(uri);
   if (existingLLMTimer) {
     clearTimeout(existingLLMTimer);
   }
 
-  // Skip LLM debounce for initial content event on open (onDidOpen already triggers it)
+  // Skip analysis for initial content event on open (onDidOpen already triggers it)
   if (recentlyOpened.has(uri)) {
     recentlyOpened.delete(uri);
     return;
   }
 
-  // Run static analysis immediately
+  // Run quick static analysis immediately (cheap checks only, no token counting or FS access)
   runStaticAnalysis(change.document);
 
-  // Debounce static refresh
-  const timer = setTimeout(() => {
-    runDebouncedAnalysis(change.document);
-    debounceTimers.delete(uri);
-  }, DEBOUNCE_DELAY);
-  debounceTimers.set(uri, timer);
-
-  // Debounce LLM analysis with longer delay
+  // Debounce full analysis (including LLM) with longer delay
   const llmTimer = setTimeout(() => {
     runFullAnalysis(change.document);
     llmDebounceTimers.delete(uri);
@@ -168,21 +208,10 @@ documents.onDidOpen((event) => {
   runFullAnalysis(event.document);
 });
 
-// Run static analysis only (fast, on keystroke)
+// Run quick static analysis only (fast, on keystroke — no token counting or FS access)
 async function runStaticAnalysis(textDocument: TextDocument): Promise<void> {
   const promptDoc = parsePromptDocument(textDocument);
-  const staticResults = staticAnalyzer.analyze(promptDoc);
-
-  lastStaticAnalysisResults.set(textDocument.uri, staticResults);
-
-  const diagnostics = resultsTodiagnostics(staticResults);
-  connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
-}
-
-// Run debounced analysis (static refresh after pause)
-async function runDebouncedAnalysis(textDocument: TextDocument): Promise<void> {
-  const promptDoc = parsePromptDocument(textDocument);
-  const staticResults = staticAnalyzer.analyze(promptDoc);
+  const staticResults = staticAnalyzer.analyzeQuick(promptDoc);
 
   lastStaticAnalysisResults.set(textDocument.uri, staticResults);
 
@@ -192,18 +221,30 @@ async function runDebouncedAnalysis(textDocument: TextDocument): Promise<void> {
 
 // Run full analysis including LLM (on save)
 async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
-  connection.console.log(`[Analysis] Running full analysis on ${textDocument.uri}`);
+  const uri = textDocument.uri;
+  const version = textDocument.version;
+
+  // Track this analysis version to detect stale results
+  documentVersions.set(uri, version);
+
+  connection.console.log(`[Analysis] Running full analysis on ${uri}`);
   const promptDoc = parsePromptDocument(textDocument);
-  const contentHash = computeCompositeHash(textDocument, promptDoc);
+  const contentHash = await computeCompositeHash(textDocument, promptDoc);
+
+  // Discard if document changed since analysis started
+  if (documentVersions.get(uri) !== version) {
+    connection.console.log('[Analysis] Document changed, discarding stale results');
+    return;
+  }
 
   // Check cache first
   const cachedResults = cache.get(contentHash);
   if (cachedResults) {
     connection.console.log('[Analysis] Using cached results');
     // Refresh static-only results for CodeLens issue summary.
-    lastStaticAnalysisResults.set(textDocument.uri, staticAnalyzer.analyze(promptDoc));
+    lastStaticAnalysisResults.set(uri, staticAnalyzer.analyze(promptDoc));
     const diagnostics = resultsTodiagnostics(cachedResults);
-    connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+    connection.sendDiagnostics({ uri, diagnostics });
     return;
   }
 
@@ -212,35 +253,42 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
   connection.console.log(`[Analysis] Static: ${staticResults.length} issues`);
 
   // Store static results for CodeLens issue summary
-  lastStaticAnalysisResults.set(textDocument.uri, staticResults);
+  lastStaticAnalysisResults.set(uri, staticResults);
 
-  // Run LLM analysis
-  connection.console.log(`[Analysis] LLM available: ${llmAnalyzer.isAvailable()}`);
-  const llmResults = await llmAnalyzer.analyze(promptDoc);
-  connection.console.log(`[Analysis] LLM: ${llmResults.length} issues`);
+  // Run LLM analysis (if enabled and available)
+  let llmResults: AnalysisResult[] = [];
+  if (serverConfig.enableLLMAnalysis) {
+    connection.console.log(`[Analysis] LLM available: ${llmAnalyzer.isAvailable()}`);
+    llmResults = await llmAnalyzer.analyze(promptDoc);
+    connection.console.log(`[Analysis] LLM: ${llmResults.length} issues`);
+  }
+
+  // Discard if document changed during LLM analysis
+  if (documentVersions.get(uri) !== version) {
+    connection.console.log('[Analysis] Document changed during analysis, discarding');
+    return;
+  }
 
   // Combine results
   const allResults = [...staticResults, ...llmResults];
-  
-  // Intentionally do not store combined results for CodeLens; summary uses last static analysis.
 
   // Cache results
   cache.set(contentHash, allResults);
 
   // Send diagnostics
   const diagnostics = resultsTodiagnostics(allResults);
-  connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+  connection.sendDiagnostics({ uri, diagnostics });
   connection.console.log(`[Analysis] Sent ${diagnostics.length} diagnostics`);
 }
 
-function computeCompositeHash(textDocument: TextDocument, promptDoc: PromptDocument): string {
+async function computeCompositeHash(textDocument: TextDocument, promptDoc: PromptDocument): Promise<string> {
   let compositeText = textDocument.getText();
 
   if (promptDoc.compositionLinks && promptDoc.compositionLinks.length > 0) {
     for (const link of promptDoc.compositionLinks) {
       if (!link.resolvedPath) continue;
       try {
-        const linkedText = fs.readFileSync(link.resolvedPath, 'utf8');
+        const linkedText = await fs.promises.readFile(link.resolvedPath, 'utf8');
         compositeText += `\n\n--- link:${link.target} ---\n${linkedText}`;
       } catch {
         // Missing/unreadable links are handled by static analyzer
@@ -432,19 +480,23 @@ function normalizeMarkdownLinkTarget(target: string): string | undefined {
 function resolveLinkPath(target: string, documentDir?: string): string | undefined {
   if (!documentDir) return undefined;
 
-  if (target.startsWith('file://')) {
-    try {
-      return fileURLToPath(target);
-    } catch {
+  // Reject file:// URIs and absolute paths to prevent path traversal
+  if (target.startsWith('file://') || path.isAbsolute(target)) {
+    return undefined;
+  }
+
+  const resolved = path.resolve(documentDir, target);
+
+  // Validate resolved path stays within workspace root
+  if (workspaceRoot) {
+    const normalizedResolved = path.normalize(resolved);
+    const normalizedRoot = path.normalize(workspaceRoot);
+    if (!normalizedResolved.startsWith(normalizedRoot + path.sep) && normalizedResolved !== normalizedRoot) {
       return undefined;
     }
   }
 
-  if (path.isAbsolute(target)) {
-    return target;
-  }
-
-  return path.resolve(documentDir, target);
+  return resolved;
 }
 
 function isPromptFile(target: string): boolean {
@@ -623,8 +675,14 @@ connection.onCodeAction((params) => {
   for (const diagnostic of params.context.diagnostics) {
     if (diagnostic.source?.startsWith('prompt-lsp') && diagnostic.data) {
       const suggestion = diagnostic.data as string;
+
+      // Sanitize LLM-generated suggestions: skip if not a string or too long
+      if (typeof suggestion !== 'string' || suggestion.length > 1000) {
+        continue;
+      }
+
       const action: CodeAction = {
-        title: `Fix: ${suggestion}`,
+        title: `Fix: ${suggestion.length > 80 ? suggestion.substring(0, 77) + '...' : suggestion}`,
         kind: CodeActionKind.QuickFix,
         diagnostics: [diagnostic],
         edit: {

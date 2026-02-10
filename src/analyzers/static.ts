@@ -116,6 +116,24 @@ export class StaticAnalyzer {
     return results;
   }
 
+  /**
+   * Fast analysis for keystroke path — skips token counting and file system access.
+   */
+  analyzeQuick(doc: PromptDocument): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+
+    results.push(...this.analyzeVariables(doc));
+    results.push(...this.analyzeInstructionStrength(doc));
+    results.push(...this.analyzeInjectionSurface(doc));
+    results.push(...this.analyzeAmbiguity(doc));
+    results.push(...this.analyzeStructure(doc));
+    results.push(...this.analyzeRedundancy(doc));
+    results.push(...this.analyzeExamples(doc));
+    results.push(...this.analyzeFrontmatter(doc));
+
+    return results;
+  }
+
   // Variable/Placeholder Validation (Tier 1)
   private analyzeVariables(doc: PromptDocument): AnalysisResult[] {
     const results: AnalysisResult[] = [];
