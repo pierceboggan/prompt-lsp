@@ -243,7 +243,6 @@ async function doSelectModel(): Promise<vscode.LanguageModelChat | undefined> {
 }
 
 async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxyResponse> {
-  const tokenSource = new vscode.CancellationTokenSource();
   try {
     const model = await selectModel();
 
@@ -251,14 +250,13 @@ async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxy
       return { text: '{}', error: 'No language models available — sign in to GitHub Copilot' };
     }
 
-    // Build messages — separate system instructions from analysis prompt
+    // Build messages
     const messages = [
-      vscode.LanguageModelChatMessage.User(`[System Instructions]\n${request.systemPrompt}`),
-      vscode.LanguageModelChatMessage.User(request.prompt),
+      vscode.LanguageModelChatMessage.User(request.systemPrompt + '\n\n' + request.prompt),
     ];
 
-    // Send the request with a 30s timeout
-    const timeout = setTimeout(() => tokenSource.cancel(), 30000);
+    // Send the request
+    const tokenSource = new vscode.CancellationTokenSource();
     const response = await model.sendRequest(messages, {}, tokenSource.token);
 
     // Collect the streamed response
@@ -266,15 +264,12 @@ async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxy
     for await (const part of response.text) {
       text += part;
     }
-    clearTimeout(timeout);
 
     return { text };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     outputChannel.appendLine(`[LLM Proxy] Error: ${message}`);
     return { text: '{}', error: `vscode.lm request failed: ${message}` };
-  } finally {
-    tokenSource.dispose();
   }
 }
 

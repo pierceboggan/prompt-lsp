@@ -480,23 +480,19 @@ function normalizeMarkdownLinkTarget(target: string): string | undefined {
 function resolveLinkPath(target: string, documentDir?: string): string | undefined {
   if (!documentDir) return undefined;
 
-  // Reject file:// URIs and absolute paths to prevent path traversal
-  if (target.startsWith('file://') || path.isAbsolute(target)) {
-    return undefined;
-  }
-
-  const resolved = path.resolve(documentDir, target);
-
-  // Validate resolved path stays within workspace root
-  if (workspaceRoot) {
-    const normalizedResolved = path.normalize(resolved);
-    const normalizedRoot = path.normalize(workspaceRoot);
-    if (!normalizedResolved.startsWith(normalizedRoot + path.sep) && normalizedResolved !== normalizedRoot) {
+  if (target.startsWith('file://')) {
+    try {
+      return fileURLToPath(target);
+    } catch {
       return undefined;
     }
   }
 
-  return resolved;
+  if (path.isAbsolute(target)) {
+    return target;
+  }
+
+  return path.resolve(documentDir, target);
 }
 
 function isPromptFile(target: string): boolean {
@@ -675,14 +671,8 @@ connection.onCodeAction((params) => {
   for (const diagnostic of params.context.diagnostics) {
     if (diagnostic.source?.startsWith('prompt-lsp') && diagnostic.data) {
       const suggestion = diagnostic.data as string;
-
-      // Sanitize LLM-generated suggestions: skip if not a string or too long
-      if (typeof suggestion !== 'string' || suggestion.length > 1000) {
-        continue;
-      }
-
       const action: CodeAction = {
-        title: `Fix: ${suggestion.length > 80 ? suggestion.substring(0, 77) + '...' : suggestion}`,
+        title: `Fix: ${suggestion}`,
         kind: CodeActionKind.QuickFix,
         diagnostics: [diagnostic],
         edit: {

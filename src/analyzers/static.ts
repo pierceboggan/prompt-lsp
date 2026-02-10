@@ -14,20 +14,6 @@ export class StaticAnalyzer {
   
   private vagueTerms = ['appropriate', 'professional', 'good', 'bad', 'nice', 'proper', 'suitable', 'reasonable', 'adequate'];
 
-  private injectionPatterns = [
-    /ignore\s+(previous|all|above)\s+(instructions?|prompts?)/i,
-    /disregard\s+(previous|all|above)/i,
-    /new\s+instructions?:/i,
-    /system\s*:\s*/i,
-    /\[INST\]/i,
-    /<<SYS>>/i,
-    /pretend\s+(you\s+are|to\s+be)/i,
-    /roleplay\s+as/i,
-    /act\s+as\s+if/i,
-    /jailbreak/i,
-    /DAN\s+mode/i,
-  ];
-
   // Model context window sizes
   private contextWindows: Record<string, number> = {
     'gpt-3.5-turbo': 4096,
@@ -104,7 +90,6 @@ export class StaticAnalyzer {
     // Run all static analyzers
     results.push(...this.analyzeVariables(doc));
     results.push(...this.analyzeInstructionStrength(doc));
-    results.push(...this.analyzeInjectionSurface(doc));
     results.push(...this.analyzeAmbiguity(doc));
     results.push(...this.analyzeStructure(doc));
     results.push(...this.analyzeRedundancy(doc));
@@ -124,7 +109,6 @@ export class StaticAnalyzer {
 
     results.push(...this.analyzeVariables(doc));
     results.push(...this.analyzeInstructionStrength(doc));
-    results.push(...this.analyzeInjectionSurface(doc));
     results.push(...this.analyzeAmbiguity(doc));
     results.push(...this.analyzeStructure(doc));
     results.push(...this.analyzeRedundancy(doc));
@@ -214,66 +198,25 @@ export class StaticAnalyzer {
   // Instruction Strength & Positioning (Tier 1)
   private analyzeInstructionStrength(doc: PromptDocument): AnalysisResult[] {
     const results: AnalysisResult[] = [];
-    const criticalKeywords = ['safety', 'security', 'harmful', 'refuse', 'reject', 'never', 'forbidden', 'prohibited', 'dangerous', 'illegal'];
 
     doc.lines.forEach((line, lineIndex) => {
-      const lowerLine = line.toLowerCase();
-
-      // Check if this line contains critical safety/constraint keywords
-      const hasCriticalKeyword = criticalKeywords.some(keyword => lowerLine.includes(keyword));
-
-      // Check for weak language in critical constraints
+      // Check for weak language
       for (const weakPattern of this.strengthPatterns.weak) {
         const regex = new RegExp(`\\b${weakPattern}\\b`, 'gi');
         let match;
         while ((match = regex.exec(line)) !== null) {
-          if (hasCriticalKeyword) {
-            results.push({
-              code: 'weak-critical-instruction',
-              message: `Critical constraint uses weak language: "${match[0]}". Consider using stronger language like "Never", "Must", or "Always".`,
-              severity: 'warning',
-              range: {
-                start: { line: lineIndex, character: match.index },
-                end: { line: lineIndex, character: match.index + match[0].length },
-              },
-              analyzer: 'instruction-strength',
-              suggestion: this.suggestStrongerLanguage(match[0]),
-            });
-          } else {
-            results.push({
-              code: 'weak-instruction',
-              message: `Weak instruction language: "${match[0]}". This may be interpreted inconsistently by the model.`,
-              severity: 'info',
-              range: {
-                start: { line: lineIndex, character: match.index },
-                end: { line: lineIndex, character: match.index + match[0].length },
-              },
-              analyzer: 'instruction-strength',
-              suggestion: this.suggestStrongerLanguage(match[0]),
-            });
-          }
+          results.push({
+            code: 'weak-instruction',
+            message: `Weak instruction language: "${match[0]}". This may be interpreted inconsistently by the model.`,
+            severity: 'info',
+            range: {
+              start: { line: lineIndex, character: match.index },
+              end: { line: lineIndex, character: match.index + match[0].length },
+            },
+            analyzer: 'instruction-strength',
+            suggestion: this.suggestStrongerLanguage(match[0]),
+          });
         }
-      }
-    });
-
-    // Check for instruction positioning - important instructions at the beginning
-    // Safety instructions should typically be at the end (recency bias)
-    const totalLines = doc.lines.length;
-    doc.lines.forEach((line, lineIndex) => {
-      const lowerLine = line.toLowerCase();
-      const hasSafetyKeyword = ['safety', 'harmful', 'refuse', 'reject', 'forbidden', 'prohibited'].some(k => lowerLine.includes(k));
-      
-      if (hasSafetyKeyword && lineIndex < totalLines * 0.3 && totalLines > 10) {
-        results.push({
-          code: 'safety-positioning',
-          message: 'Safety instructions placed early in the prompt. Consider moving critical safety constraints toward the end for better adherence (recency bias).',
-          severity: 'info',
-          range: {
-            start: { line: lineIndex, character: 0 },
-            end: { line: lineIndex, character: line.length },
-          },
-          analyzer: 'instruction-strength',
-        });
       }
     });
 
@@ -315,70 +258,6 @@ export class StaticAnalyzer {
       'optionally': 'Always',
     };
     return suggestions[weakPhrase.toLowerCase()] || 'Must';
-  }
-
-  // Prompt Injection Surface Analysis (Tier 1)
-  private analyzeInjectionSurface(doc: PromptDocument): AnalysisResult[] {
-    const results: AnalysisResult[] = [];
-
-    doc.lines.forEach((line, lineIndex) => {
-      // Check for user input interpolation points
-      const variablePattern = /\{\{(user_input|user_message|input|query|message|user_query)\}\}/gi;
-      let match;
-      while ((match = variablePattern.exec(line)) !== null) {
-        results.push({
-          code: 'injection-surface',
-          message: `User input interpolation point: {{${match[1]}}}. This is a potential injection vector. Consider using delimiters, input validation, or sandboxing.`,
-          severity: 'warning',
-          range: {
-            start: { line: lineIndex, character: match.index },
-            end: { line: lineIndex, character: match.index + match[0].length },
-          },
-          analyzer: 'injection-analysis',
-          suggestion: `<user_input>\n{{${match[1]}}}\n</user_input>`,
-        });
-      }
-
-      // Check for known injection patterns in the prompt itself
-      for (const pattern of this.injectionPatterns) {
-        const injectionMatch = pattern.exec(line);
-        if (injectionMatch) {
-          results.push({
-            code: 'injection-pattern',
-            message: `Potential jailbreak pattern detected: "${injectionMatch[0]}". If this is in user input, it could override your instructions.`,
-            severity: 'error',
-            range: {
-              start: { line: lineIndex, character: injectionMatch.index },
-              end: { line: lineIndex, character: injectionMatch.index + injectionMatch[0].length },
-            },
-            analyzer: 'injection-analysis',
-          });
-        }
-      }
-    });
-
-    // Check if there are delimiters around user input
-    const hasDelimiters = doc.text.includes('<user_input>') || 
-                          doc.text.includes('```user') ||
-                          doc.text.includes('---USER INPUT---') ||
-                          doc.text.includes('<input>');
-    
-    const hasUserVars = /\{\{(user_input|user_message|input|query)\}\}/gi.test(doc.text);
-
-    if (hasUserVars && !hasDelimiters) {
-      results.push({
-        code: 'missing-input-delimiters',
-        message: 'User input is interpolated without clear delimiters. Consider wrapping user input in XML tags or code blocks to prevent injection attacks.',
-        severity: 'warning',
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 0, character: 1 },
-        },
-        analyzer: 'injection-analysis',
-      });
-    }
-
-    return results;
   }
 
   // Ambiguity Detection (Tier 1)
@@ -634,22 +513,6 @@ export class StaticAnalyzer {
         });
       }
 
-      // Check for negative examples (refusal cases)
-      const hasRefusalInstructions = /refuse|reject|decline|don't|do not|never/i.test(doc.text);
-      const hasNegativeExample = /bad example|negative example|incorrect|wrong|don't do|invalid/i.test(doc.text);
-
-      if (hasRefusalInstructions && !hasNegativeExample && inputExamples > 0) {
-        results.push({
-          code: 'missing-negative-example',
-          message: 'Prompt has refusal/rejection instructions but no negative examples. Consider adding an example showing correct refusal behavior.',
-          severity: 'info',
-          range: {
-            start: { line: 0, character: 0 },
-            end: { line: 0, character: 1 },
-          },
-          analyzer: 'example-analysis',
-        });
-      }
     }
 
     return results;

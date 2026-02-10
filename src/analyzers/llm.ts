@@ -56,7 +56,6 @@ export class LLMAnalyzer {
         this.analyzeContradictions(doc),
         this.analyzeAmbiguity(doc),
         this.analyzePersonaConsistency(doc),
-        this.analyzeSafetyGuardrails(doc),
         this.analyzeCognitiveLoad(doc),
         this.analyzeOutputShape(doc),
         this.analyzeSemanticCoverage(doc),
@@ -97,9 +96,9 @@ export class LLMAnalyzer {
 5. Scope ambiguity or unclear precedence
 
 Prompt to analyze:
-<prompt_to_analyze>
+"""
 ${doc.text}
-</prompt_to_analyze>
+"""
 
 Respond in JSON format:
 {
@@ -152,9 +151,9 @@ If no issues found, return {"issues": []}`;
 3. Format conflicts (e.g., "respond in exactly 10 words" + "include a code block")
 
 Prompt to analyze:
-<prompt_to_analyze>
+"""
 ${doc.text}
-</prompt_to_analyze>
+"""
 
 Respond in JSON format:
 {
@@ -224,9 +223,9 @@ If no contradictions found, return {"contradictions": []}`;
 3. Implied characteristics that clash with stated behavior
 
 Prompt to analyze:
-<prompt_to_analyze>
+"""
 ${doc.text}
-</prompt_to_analyze>
+"""
 
 Respond in JSON format:
 {
@@ -269,64 +268,6 @@ If no issues found, return {"issues": []}`;
   }
 
   /**
-   * Safety Guardrail Integrity (Tier 2)
-   * Identifies weak or vulnerable safety measures
-   */
-  private async analyzeSafetyGuardrails(doc: PromptDocument): Promise<AnalysisResult[]> {
-    const prompt = `Analyze this AI prompt for safety guardrail weaknesses. Look for:
-1. Guardrails vulnerable to roleplay/pretend attacks
-2. Missing safety boundaries for detected capabilities
-3. Instructions that could be easily bypassed
-4. Safety rules using weak language
-
-Prompt to analyze:
-<prompt_to_analyze>
-${doc.text}
-</prompt_to_analyze>
-
-Respond in JSON format:
-{
-  "vulnerabilities": [
-    {
-      "description": "description of the vulnerability",
-      "vulnerable_text": "the specific text that is weak",
-      "attack_vector": "how it could be exploited",
-      "severity": "error" | "warning",
-      "suggestion": "how to strengthen"
-    }
-  ]
-}
-
-If no vulnerabilities found, return {"vulnerabilities": []}`;
-
-    const response = await this.callLLM(prompt);
-    const results: AnalysisResult[] = [];
-
-    try {
-      const parsed = this.extractJSON(response);
-      for (const vuln of parsed.vulnerabilities || []) {
-        const line = this.findLineNumber(doc, vuln.vulnerable_text);
-        
-        results.push({
-          code: 'safety-vulnerability',
-          message: `Safety vulnerability: ${vuln.description}. Attack vector: ${vuln.attack_vector}`,
-          severity: vuln.severity === 'error' ? 'error' : 'warning',
-          range: {
-            start: { line, character: 0 },
-            end: { line, character: doc.lines[line]?.length || 0 },
-          },
-          analyzer: 'safety-analysis',
-          suggestion: vuln.suggestion,
-        });
-      }
-    } catch (e) {
-      // JSON parse error, skip
-    }
-
-    return results;
-  }
-
-  /**
    * Cognitive Load Assessment (Tier 2)
    * Identifies overly complex prompts that may overwhelm model attention
    */
@@ -338,9 +279,9 @@ If no vulnerabilities found, return {"vulnerabilities": []}`;
 4. Too many constraints fighting for attention
 
 Prompt to analyze:
-<prompt_to_analyze>
+"""
 ${doc.text}
-</prompt_to_analyze>
+"""
 
 Respond in JSON format:
 {
@@ -406,9 +347,9 @@ Respond in JSON format:
 4. Format compliance probability (will output match specified format)
 
 Prompt to analyze:
-<prompt_to_analyze>
+"""
 ${doc.text}
-</prompt_to_analyze>
+"""
 
 Respond in JSON format:
 {
@@ -531,9 +472,9 @@ Respond in JSON format:
 4. What situations might produce undefined behavior?
 
 Prompt to analyze:
-<prompt_to_analyze>
+"""
 ${doc.text}
-</prompt_to_analyze>
+"""
 
 Respond in JSON format:
 {
@@ -649,9 +590,9 @@ Respond in JSON format:
 3. Priority conflicts (two sections both claiming highest priority)
 
 Composed prompt:
-<prompt_to_analyze>
+"""
 ${composedText}
-</prompt_to_analyze>
+"""
 
 Respond in JSON format:
 {
