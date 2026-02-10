@@ -180,3 +180,4 @@ The `examples/` directory contains sample prompt files:
 - [`sample.prompt.md`](examples/sample.prompt.md) — A well-structured prompt demonstrating common patterns
 - [`problematic.agent.md`](examples/problematic.agent.md) — An intentionally flawed prompt that triggers many diagnostics
 - [`self-verification.agent.md`](examples/self-verification.agent.md) — An agent prompt demonstrating self-verification (checking its own output before responding)
+- [`skill-improvement.agent.md`](examples/skill-improvement.agent.md) — Before/after comparison showing how to improve an agent prompt by adding self-verification
