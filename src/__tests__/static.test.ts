@@ -52,6 +52,7 @@ function makeDoc(text: string): PromptDocument {
     variables,
     sections,
     compositionLinks: [],
+    fileType: 'prompt' as const,
   };
 }
 

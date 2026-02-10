@@ -24,7 +24,7 @@ import fs from 'fs';
 import { StaticAnalyzer } from './analyzers/static';
 import { LLMAnalyzer } from './analyzers/llm';
 import { AnalysisCache } from './cache';
-import { PromptDocument, AnalysisResult, CompositionLink, LLMProxyRequest, LLMProxyResponse } from './types';
+import { PromptDocument, PromptFileType, AnalysisResult, CompositionLink, LLMProxyRequest, LLMProxyResponse } from './types';
 
 // Create a connection for the server
 const connection = createConnection(ProposedFeatures.all);
@@ -319,6 +319,69 @@ function parsePromptDocument(textDocument: TextDocument): PromptDocument {
     variables,
     sections,
     compositionLinks,
+    fileType: detectFileType(textDocument.uri),
+    ...parseFrontmatter(lines),
+  };
+}
+
+function detectFileType(uri: string): PromptFileType {
+  const lower = uri.toLowerCase();
+  const baseName = lower.split(/[\\/]/).pop() || '';
+  if (baseName === 'agents.md') return 'agents-md';
+  if (baseName === 'copilot-instructions.md') return 'copilot-instructions';
+  if (baseName === 'skill.md') return 'skill';
+  if (lower.endsWith('.agent.md')) return 'agent';
+  if (lower.endsWith('.prompt.md')) return 'prompt';
+  if (lower.endsWith('.system.md')) return 'system';
+  if (lower.endsWith('.instructions.md')) return 'instructions';
+  return 'unknown';
+}
+
+function parseFrontmatter(lines: string[]): { frontmatter?: Record<string, unknown>; frontmatterRange?: { startLine: number; endLine: number } } {
+  if (lines.length === 0 || lines[0].trim() !== '---') {
+    return {};
+  }
+
+  let endLine = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') {
+      endLine = i;
+      break;
+    }
+  }
+
+  if (endLine === -1) {
+    return {};
+  }
+
+  const frontmatterLines = lines.slice(1, endLine);
+  const frontmatter: Record<string, unknown> = {};
+
+  for (const line of frontmatterLines) {
+    const match = line.match(/^(\w[\w-]*):\s*(.*)/);
+    if (match) {
+      const key = match[1];
+      let value: unknown = match[2].trim();
+
+      // Parse arrays (simple YAML list on single line)
+      if (typeof value === 'string' && value.startsWith('[') && value.endsWith(']')) {
+        try {
+          value = JSON.parse(value);
+        } catch {
+          // Keep as string
+        }
+      }
+      // Parse booleans
+      if (value === 'true') value = true;
+      if (value === 'false') value = false;
+
+      frontmatter[key] = value;
+    }
+  }
+
+  return {
+    frontmatter: Object.keys(frontmatter).length > 0 ? frontmatter : undefined,
+    frontmatterRange: { startLine: 0, endLine },
   };
 }
 
@@ -370,16 +433,22 @@ function resolveLinkPath(target: string, documentDir?: string): string | undefin
 
 function isPromptFile(target: string): boolean {
   const lower = target.toLowerCase();
+  const baseName = lower.split(/[\/]/).pop() || '';
   return (
     lower.endsWith('.prompt.md') ||
     lower.endsWith('.system.md') ||
     lower.endsWith('.agent.md') ||
+    lower.endsWith('.instructions.md') ||
+    baseName === 'agents.md' ||
+    baseName === 'copilot-instructions.md' ||
     isSkillMarkdownPath(lower)
   );
 }
 
 function isSkillMarkdownPath(target: string): boolean {
-  return target.endsWith('.md') && /(^|[\\/])skills[\\/]/.test(target);
+  if (!target.endsWith('.md')) return false;
+  return /(^|[\/])\.?(github|claude)[\/]skills[\/]/.test(target) ||
+         /(^|[\/])skills[\/]/.test(target);
 }
 
 // Convert analysis results to LSP diagnostics

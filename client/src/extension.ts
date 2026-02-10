@@ -49,19 +49,29 @@ export function activate(context: vscode.ExtensionContext) {
     // Register the server for prompt documents
     documentSelector: [
       { scheme: 'file', language: 'prompt' },
+      // Core prompt file types
       { scheme: 'file', pattern: '**/*.prompt.md' },
       { scheme: 'file', pattern: '**/*.system.md' },
       { scheme: 'file', pattern: '**/*.agent.md' },
       { scheme: 'file', pattern: '**/*.prompt' },
-      // Also support markdown files with certain patterns
-      { scheme: 'file', language: 'markdown', pattern: '**/prompts/**/*.md' },
+      // Custom instructions
+      { scheme: 'file', pattern: '**/*.instructions.md' },
+      { scheme: 'file', pattern: '**/.github/copilot-instructions.md' },
+      { scheme: 'file', pattern: '**/AGENTS.md' },
+      // Skills (Agent Skills standard + Claude legacy)
+      { scheme: 'file', language: 'markdown', pattern: '**/.github/skills/**/SKILL.md' },
+      { scheme: 'file', language: 'markdown', pattern: '**/.claude/skills/**/SKILL.md' },
       { scheme: 'file', language: 'markdown', pattern: '**/skills/**/*.md' },
+      // Prompt folders
+      { scheme: 'file', language: 'markdown', pattern: '**/prompts/**/*.md' },
     ],
     synchronize: {
       // Notify the server about file changes to prompt files
       fileEvents: [
-        vscode.workspace.createFileSystemWatcher('**/*.{prompt.md,system.md,agent.md,prompt}'),
-        vscode.workspace.createFileSystemWatcher('**/skills/**/*.md'),
+        vscode.workspace.createFileSystemWatcher('**/*.{prompt.md,system.md,agent.md,prompt,instructions.md}'),
+        vscode.workspace.createFileSystemWatcher('**/skills/**/SKILL.md'),
+        vscode.workspace.createFileSystemWatcher('**/AGENTS.md'),
+        vscode.workspace.createFileSystemWatcher('**/.github/copilot-instructions.md'),
       ],
     },
     outputChannel,
@@ -258,18 +268,24 @@ async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxy
 
 function isPromptDocument(document: vscode.TextDocument): boolean {
   const fileName = document.fileName.toLowerCase();
+  const baseName = fileName.split(/[\/]/).pop() || '';
   return (
     document.languageId === 'prompt' ||
     fileName.endsWith('.prompt.md') ||
     fileName.endsWith('.system.md') ||
     fileName.endsWith('.agent.md') ||
     fileName.endsWith('.prompt') ||
+    fileName.endsWith('.instructions.md') ||
+    baseName === 'agents.md' ||
+    baseName === 'copilot-instructions.md' ||
     isSkillMarkdown(fileName)
   );
 }
 
 function isSkillMarkdown(fileName: string): boolean {
-  return fileName.endsWith('.md') && /(^|[\\/])skills[\\/]/.test(fileName);
+  if (!fileName.endsWith('.md')) return false;
+  return /(^|[\/])\.?(github|claude)[\/]skills[\/]/.test(fileName) ||
+         /(^|[\/])skills[\/]/.test(fileName);
 }
 
 export function deactivate(): Thenable<void> | undefined {

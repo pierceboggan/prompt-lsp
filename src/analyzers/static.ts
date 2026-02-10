@@ -1,6 +1,6 @@
 import { Range } from 'vscode-languageserver';
 import fs from 'fs';
-import { PromptDocument, AnalysisResult, InstructionStrength, TokenInfo } from '../types';
+import { PromptDocument, AnalysisResult, InstructionStrength, TokenInfo, PromptFileType } from '../types';
 import { encoding_for_model, TiktokenModel } from 'tiktoken';
 
 export class StaticAnalyzer {
@@ -108,6 +108,7 @@ export class StaticAnalyzer {
     results.push(...this.analyzeExamples(doc));
     results.push(...this.analyzeTokenUsage(doc));
     results.push(...this.analyzeCompositionLinks(doc));
+    results.push(...this.analyzeFrontmatter(doc));
 
     return results;
   }
@@ -774,5 +775,177 @@ export class StaticAnalyzer {
     }
 
     return results;
+  }
+
+  // Frontmatter Validation
+  private analyzeFrontmatter(doc: PromptDocument): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+
+    if (!doc.frontmatter || !doc.frontmatterRange) {
+      // Check for missing required frontmatter on skills
+      if (doc.fileType === 'skill') {
+        results.push({
+          code: 'skill-missing-frontmatter',
+          message: 'SKILL.md files require YAML frontmatter with `name` and `description` fields.',
+          severity: 'error',
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+          analyzer: 'frontmatter-validation',
+        });
+      }
+      return results;
+    }
+
+    const fm = doc.frontmatter;
+    const fmRange = doc.frontmatterRange;
+
+    // Validate by file type
+    switch (doc.fileType) {
+      case 'agent':
+        this.validateAgentFrontmatter(fm, fmRange, results);
+        break;
+      case 'prompt':
+        this.validatePromptFrontmatter(fm, fmRange, results);
+        break;
+      case 'instructions':
+        this.validateInstructionsFrontmatter(fm, fmRange, results);
+        break;
+      case 'skill':
+        this.validateSkillFrontmatter(fm, fmRange, results);
+        break;
+    }
+
+    return results;
+  }
+
+  private validateAgentFrontmatter(
+    fm: Record<string, unknown>,
+    fmRange: { startLine: number; endLine: number },
+    results: AnalysisResult[],
+  ): void {
+    const knownFields = new Set([
+      'description', 'name', 'argument-hint', 'tools', 'agents', 'model',
+      'user-invokable', 'disable-model-invocation', 'target', 'mcp-servers',
+      'handoffs', 'infer',
+    ]);
+
+    if (!fm.description) {
+      results.push({
+        code: 'agent-missing-description',
+        message: 'Custom agents should have a `description` field in frontmatter. This is shown as placeholder text in the chat input.',
+        severity: 'warning',
+        range: { start: { line: fmRange.startLine, character: 0 }, end: { line: fmRange.endLine, character: 3 } },
+        analyzer: 'frontmatter-validation',
+      });
+    }
+
+    if (fm.infer !== undefined) {
+      results.push({
+        code: 'agent-deprecated-infer',
+        message: 'The `infer` field is deprecated. Use `user-invokable` and `disable-model-invocation` instead.',
+        severity: 'warning',
+        range: { start: { line: fmRange.startLine, character: 0 }, end: { line: fmRange.endLine, character: 3 } },
+        analyzer: 'frontmatter-validation',
+      });
+    }
+
+    this.warnUnknownFields(fm, knownFields, fmRange, 'agent', results);
+  }
+
+  private validatePromptFrontmatter(
+    fm: Record<string, unknown>,
+    fmRange: { startLine: number; endLine: number },
+    results: AnalysisResult[],
+  ): void {
+    const knownFields = new Set([
+      'description', 'name', 'argument-hint', 'agent', 'model', 'tools',
+    ]);
+
+    this.warnUnknownFields(fm, knownFields, fmRange, 'prompt', results);
+  }
+
+  private validateInstructionsFrontmatter(
+    fm: Record<string, unknown>,
+    fmRange: { startLine: number; endLine: number },
+    results: AnalysisResult[],
+  ): void {
+    const knownFields = new Set(['description', 'name', 'applyTo']);
+
+    this.warnUnknownFields(fm, knownFields, fmRange, 'instructions', results);
+  }
+
+  private validateSkillFrontmatter(
+    fm: Record<string, unknown>,
+    fmRange: { startLine: number; endLine: number },
+    results: AnalysisResult[],
+  ): void {
+    if (!fm.name) {
+      results.push({
+        code: 'skill-missing-name',
+        message: 'SKILL.md requires a `name` field in frontmatter. Must be lowercase with hyphens, max 64 characters.',
+        severity: 'error',
+        range: { start: { line: fmRange.startLine, character: 0 }, end: { line: fmRange.endLine, character: 3 } },
+        analyzer: 'frontmatter-validation',
+      });
+    } else if (typeof fm.name === 'string') {
+      if (fm.name.length > 64) {
+        results.push({
+          code: 'skill-name-too-long',
+          message: `Skill name is ${fm.name.length} characters. Maximum is 64.`,
+          severity: 'error',
+          range: { start: { line: fmRange.startLine, character: 0 }, end: { line: fmRange.endLine, character: 3 } },
+          analyzer: 'frontmatter-validation',
+        });
+      }
+      if (!/^[a-z0-9-]+$/.test(fm.name)) {
+        results.push({
+          code: 'skill-name-format',
+          message: 'Skill name must be lowercase, using hyphens for spaces (e.g., `webapp-testing`).',
+          severity: 'warning',
+          range: { start: { line: fmRange.startLine, character: 0 }, end: { line: fmRange.endLine, character: 3 } },
+          analyzer: 'frontmatter-validation',
+        });
+      }
+    }
+
+    if (!fm.description) {
+      results.push({
+        code: 'skill-missing-description',
+        message: 'SKILL.md requires a `description` field. Be specific about capabilities and use cases to help Copilot decide when to load the skill.',
+        severity: 'error',
+        range: { start: { line: fmRange.startLine, character: 0 }, end: { line: fmRange.endLine, character: 3 } },
+        analyzer: 'frontmatter-validation',
+      });
+    } else if (typeof fm.description === 'string' && fm.description.length > 1024) {
+      results.push({
+        code: 'skill-description-too-long',
+        message: `Skill description is ${fm.description.length} characters. Maximum is 1024.`,
+        severity: 'warning',
+        range: { start: { line: fmRange.startLine, character: 0 }, end: { line: fmRange.endLine, character: 3 } },
+        analyzer: 'frontmatter-validation',
+      });
+    }
+
+    const knownFields = new Set(['name', 'description']);
+    this.warnUnknownFields(fm, knownFields, fmRange, 'skill', results);
+  }
+
+  private warnUnknownFields(
+    fm: Record<string, unknown>,
+    knownFields: Set<string>,
+    fmRange: { startLine: number; endLine: number },
+    fileType: string,
+    results: AnalysisResult[],
+  ): void {
+    for (const key of Object.keys(fm)) {
+      if (!knownFields.has(key)) {
+        results.push({
+          code: 'unknown-frontmatter-field',
+          message: `Unknown frontmatter field '${key}' for ${fileType} file. Known fields: ${[...knownFields].join(', ')}.`,
+          severity: 'info',
+          range: { start: { line: fmRange.startLine, character: 0 }, end: { line: fmRange.endLine, character: 3 } },
+          analyzer: 'frontmatter-validation',
+        });
+      }
+    }
   }
 }
