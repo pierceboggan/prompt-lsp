@@ -51,6 +51,7 @@ function makeDoc(text: string): PromptDocument {
     lines,
     variables,
     sections,
+    compositionLinks: [],
   };
 }
 

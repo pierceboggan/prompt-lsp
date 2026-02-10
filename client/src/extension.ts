@@ -23,6 +23,7 @@ const LLMRequestType = new RequestType<LLMProxyRequest, LLMProxyResponse, void>(
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
 let cachedModel: vscode.LanguageModelChat | undefined;
+let modelSelectionPromise: Promise<vscode.LanguageModelChat | undefined> | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Prompt LSP');
@@ -159,6 +160,7 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.lm.onDidChangeChatModels(() => {
         outputChannel.appendLine('[LLM Proxy] Models changed, clearing cache');
         cachedModel = undefined;
+        modelSelectionPromise = undefined;
       })
     );
   }
@@ -181,6 +183,20 @@ async function selectModel(): Promise<vscode.LanguageModelChat | undefined> {
     return cachedModel;
   }
 
+  // If another call is already selecting, wait for it
+  if (modelSelectionPromise) {
+    return modelSelectionPromise;
+  }
+
+  modelSelectionPromise = doSelectModel();
+  try {
+    return await modelSelectionPromise;
+  } finally {
+    modelSelectionPromise = undefined;
+  }
+}
+
+async function doSelectModel(): Promise<vscode.LanguageModelChat | undefined> {
   if (!vscode.lm || !vscode.lm.selectChatModels) {
     return undefined;
   }

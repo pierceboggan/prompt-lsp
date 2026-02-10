@@ -40,6 +40,7 @@ const cache = new AnalysisCache();
 // Debounce timers for analysis
 const debounceTimers: Map<string, NodeJS.Timeout> = new Map();
 const llmDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
+const recentlyOpened: Set<string> = new Set();
 const DEBOUNCE_DELAY = 500; // ms
 const LLM_DEBOUNCE_DELAY = 2000; // ms - longer delay for LLM to avoid excessive API calls
 
@@ -132,6 +133,12 @@ documents.onDidChangeContent((change) => {
     clearTimeout(existingLLMTimer);
   }
 
+  // Skip LLM debounce for initial content event on open (onDidOpen already triggers it)
+  if (recentlyOpened.has(uri)) {
+    recentlyOpened.delete(uri);
+    return;
+  }
+
   // Run static analysis immediately
   runStaticAnalysis(change.document);
 
@@ -157,6 +164,7 @@ documents.onDidSave((event) => {
 
 // Full analysis when document is opened
 documents.onDidOpen((event) => {
+  recentlyOpened.add(event.document.uri);
   runFullAnalysis(event.document);
 });
 
