@@ -1,5 +1,8 @@
 # Prompt LSP
 
+[![CI](https://github.com/pierceboggan/prompt-lsp/actions/workflows/ci.yml/badge.svg)](https://github.com/pierceboggan/prompt-lsp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A Language Server Protocol implementation for analyzing, validating, and improving AI prompts.
 
 ## Features
@@ -27,12 +30,11 @@ A Language Server Protocol implementation for analyzing, validating, and improvi
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/prompt-lsp.git
+git clone https://github.com/pierceboggan/prompt-lsp.git
 cd prompt-lsp
 
 # Install dependencies
 npm install
-cd client && npm install && cd ..
 
 # Build
 npm run build
@@ -60,6 +62,14 @@ The extension automatically recognizes:
 - **Prompt LSP: Analyze Prompt** - Force re-analysis
 - **Prompt LSP: Show Token Count** - Display token count
 - **Prompt LSP: Clear Analysis Cache** - Clear cached results
+
+### Accessibility
+
+All diagnostics are surfaced through the standard VS Code Problems panel, which supports:
+- Screen reader announcements for new diagnostics
+- Keyboard navigation through all warnings and errors (`F8` / `Shift+F8`)
+- High-contrast theme compatibility for severity indicators
+- Hover tooltips with detailed explanations accessible via keyboard (`Ctrl+K Ctrl+I`)
 
 ## Configuration
 
@@ -125,6 +135,9 @@ npm run watch
 # Watch mode (client)
 cd client && npm run watch
 
+# Run tests
+npm test
+
 # Debug in VS Code
 # Press F5 with launch.json configured
 ```
@@ -153,3 +166,17 @@ prompt-lsp/
 ## License
 
 MIT
+
+## Documentation
+
+- [Contributing Guide](CONTRIBUTING.md) — How to set up, build, test, and contribute
+- [Agent Prompts Guide](docs/agents.md) — Best practices for writing `.agent.md` files
+- [Design Specification](docs/SPEC.md) — Architecture and analysis tier details
+
+## Examples
+
+The `examples/` directory contains sample prompt files:
+
+- [`sample.prompt.md`](examples/sample.prompt.md) — A well-structured prompt demonstrating common patterns
+- [`problematic.agent.md`](examples/problematic.agent.md) — An intentionally flawed prompt that triggers many diagnostics
+- [`self-verification.agent.md`](examples/self-verification.agent.md) — An agent prompt demonstrating self-verification (checking its own output before responding)
