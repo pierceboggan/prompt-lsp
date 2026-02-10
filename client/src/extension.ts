@@ -22,6 +22,7 @@ const LLMRequestType = new RequestType<LLMProxyRequest, LLMProxyResponse, void>(
 
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
+let cachedModel: vscode.LanguageModelChat | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Prompt LSP');
@@ -152,6 +153,16 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // Invalidate cached model when available models change
+  if (vscode.lm && vscode.lm.onDidChangeChatModels) {
+    context.subscriptions.push(
+      vscode.lm.onDidChangeChatModels(() => {
+        outputChannel.appendLine('[LLM Proxy] Models changed, clearing cache');
+        cachedModel = undefined;
+      })
+    );
+  }
+
   // Start the client
   client.start();
 
@@ -165,35 +176,46 @@ export function activate(context: vscode.ExtensionContext) {
  * Handle LLM proxy requests from the language server using vscode.lm API.
  * This lets the extension use the user's Copilot subscription instead of requiring API keys.
  */
+async function selectModel(): Promise<vscode.LanguageModelChat | undefined> {
+  if (cachedModel) {
+    return cachedModel;
+  }
+
+  if (!vscode.lm || !vscode.lm.selectChatModels) {
+    return undefined;
+  }
+
+  outputChannel.appendLine('[LLM Proxy] Selecting chat models...');
+
+  let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+  outputChannel.appendLine(`[LLM Proxy] gpt-4o models found: ${models.length}`);
+
+  if (models.length === 0) {
+    models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+    outputChannel.appendLine(`[LLM Proxy] Any Copilot models found: ${models.length}`);
+  }
+
+  if (models.length === 0) {
+    models = await vscode.lm.selectChatModels();
+    outputChannel.appendLine(`[LLM Proxy] Any models found: ${models.length}`);
+  }
+
+  if (models.length === 0) {
+    return undefined;
+  }
+
+  cachedModel = models[0];
+  outputChannel.appendLine(`[LLM Proxy] Using model: ${cachedModel.name} (${cachedModel.vendor}/${cachedModel.family})`);
+  return cachedModel;
+}
+
 async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxyResponse> {
   try {
-    // Check if vscode.lm is available
-    if (!vscode.lm || !vscode.lm.selectChatModels) {
-      return { text: '{}', error: 'vscode.lm API not available — install GitHub Copilot extension' };
-    }
+    const model = await selectModel();
 
-    outputChannel.appendLine('[LLM Proxy] Selecting chat models...');
-
-    // Select a chat model — prefer Copilot models
-    let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
-    outputChannel.appendLine(`[LLM Proxy] gpt-4o models found: ${models.length}`);
-
-    if (models.length === 0) {
-      models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
-      outputChannel.appendLine(`[LLM Proxy] Any Copilot models found: ${models.length}`);
-    }
-
-    if (models.length === 0) {
-      models = await vscode.lm.selectChatModels();
-      outputChannel.appendLine(`[LLM Proxy] Any models found: ${models.length}`);
-    }
-
-    if (models.length === 0) {
+    if (!model) {
       return { text: '{}', error: 'No language models available — sign in to GitHub Copilot' };
     }
-
-    const model = models[0];
-    outputChannel.appendLine(`[LLM Proxy] Using model: ${model.name} (${model.vendor}/${model.family})`);
 
     // Build messages
     const messages = [
