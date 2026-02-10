@@ -6,6 +6,15 @@ export interface PromptDocument {
   lines: string[];
   variables: Map<string, number[]>;
   sections: Section[];
+  compositionLinks: CompositionLink[];
+}
+
+export interface CompositionLink {
+  target: string;
+  resolvedPath?: string;
+  line: number;
+  column: number;
+  endColumn: number;
 }
 
 export interface Section {
@@ -93,10 +102,20 @@ export interface CacheEntry {
 
 export interface PromptLSPConfig {
   enableLLMAnalysis: boolean;
-  llmProvider?: 'openai' | 'anthropic' | 'azure';
-  llmApiKey?: string;
-  llmModel?: string;
   cacheTTL: number; // in seconds
   targetModel?: string; // Target model for compatibility checks
   maxTokenBudget?: number;
 }
+
+// LSP proxy types for vscode.lm integration
+export interface LLMProxyRequest {
+  prompt: string;
+  systemPrompt: string;
+}
+
+export interface LLMProxyResponse {
+  text: string;
+  error?: string;
+}
+
+export type LLMProxyFn = (request: LLMProxyRequest) => Promise<LLMProxyResponse>;

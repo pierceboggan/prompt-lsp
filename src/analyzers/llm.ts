@@ -1,26 +1,44 @@
-import { PromptDocument, AnalysisResult } from '../types';
+import fs from 'fs';
+import { PromptDocument, AnalysisResult, LLMProxyFn } from '../types';
 
 /**
  * LLM-powered analyzer for semantic analysis that can't be done statically.
  * Handles: contradiction detection, persona consistency, safety analysis, etc.
  */
 export class LLMAnalyzer {
-  private apiKey?: string;
-  private model: string = 'gpt-4';
-  private enabled: boolean = false;
+  private proxyFn?: LLMProxyFn;
 
-  constructor(apiKey?: string, model?: string) {
-    this.apiKey = apiKey || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
-    this.model = model || 'gpt-4';
-    this.enabled = !!this.apiKey;
+  /**
+   * Extract JSON from an LLM response that may be wrapped in markdown code fences.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private extractJSON(text: string): any {
+    // Strip markdown code fences: ```json ... ``` or ``` ... ```
+    const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+    const jsonStr = fenceMatch ? fenceMatch[1].trim() : text.trim();
+    return JSON.parse(jsonStr);
+  }
+
+  /**
+   * Set a proxy function for LLM calls (vscode.lm / Copilot integration).
+   */
+  setProxyFn(fn: LLMProxyFn): void {
+    this.proxyFn = fn;
+  }
+
+  /**
+   * Returns true if LLM analysis can run (proxy is configured).
+   */
+  isAvailable(): boolean {
+    return !!this.proxyFn;
   }
 
   async analyze(doc: PromptDocument): Promise<AnalysisResult[]> {
-    if (!this.enabled) {
+    if (!this.isAvailable()) {
       // Return a hint that LLM analysis is disabled
       return [{
         code: 'llm-disabled',
-        message: 'LLM-powered analysis is disabled. Set OPENAI_API_KEY or ANTHROPIC_API_KEY to enable contradiction detection, persona consistency, and other semantic analyses.',
+        message: 'LLM-powered analysis is disabled. Install GitHub Copilot to enable contradiction detection, persona consistency, and other semantic analyses.',
         severity: 'hint',
         range: {
           start: { line: 0, character: 0 },
@@ -36,26 +54,32 @@ export class LLMAnalyzer {
       // Run all LLM-based analyses in parallel
       const [
         contradictions,
+        ambiguities,
         personaIssues,
         safetyIssues,
         cognitiveLoad,
         outputShape,
         semanticCoverage,
+        compositionConflicts,
       ] = await Promise.all([
         this.analyzeContradictions(doc),
+        this.analyzeAmbiguity(doc),
         this.analyzePersonaConsistency(doc),
         this.analyzeSafetyGuardrails(doc),
         this.analyzeCognitiveLoad(doc),
         this.analyzeOutputShape(doc),
         this.analyzeSemanticCoverage(doc),
+        this.analyzeCompositionConflicts(doc),
       ]);
 
       results.push(...contradictions);
+      results.push(...ambiguities);
       results.push(...personaIssues);
       results.push(...safetyIssues);
       results.push(...cognitiveLoad);
       results.push(...outputShape);
       results.push(...semanticCoverage);
+      results.push(...compositionConflicts);
     } catch (error) {
       results.push({
         code: 'llm-error',
@@ -67,6 +91,63 @@ export class LLMAnalyzer {
         },
         analyzer: 'llm-analyzer',
       });
+    }
+
+    return results;
+  }
+
+  /**
+   * Ambiguity Detection (Tier 1 - LLM)
+   * Finds vague, underspecified, or context-missing instructions with suggestions
+   */
+  private async analyzeAmbiguity(doc: PromptDocument): Promise<AnalysisResult[]> {
+    const prompt = `Analyze this AI prompt for ambiguity. Look for:
+1. Vague or underspecified instructions
+2. Ambiguous quantifiers ("a few", "sometimes", etc.)
+3. Unresolved references ("as mentioned above")
+4. Undefined terms ("be professional" without definition)
+5. Scope ambiguity or unclear precedence
+
+Prompt to analyze:
+"""
+${doc.text}
+"""
+
+Respond in JSON format:
+{
+  "issues": [
+    {
+      "text": "exact ambiguous text",
+      "type": "quantifier" | "reference" | "term" | "scope" | "other",
+      "severity": "warning" | "info",
+      "suggestion": "specific rewrite or clarification"
+    }
+  ]
+}
+
+If no issues found, return {"issues": []}`;
+
+    const response = await this.callLLM(prompt);
+    const results: AnalysisResult[] = [];
+
+    try {
+      const parsed = this.extractJSON(response);
+      for (const issue of parsed.issues || []) {
+        const line = this.findLineNumber(doc, issue.text);
+        results.push({
+          code: 'ambiguity-llm',
+          message: `Ambiguity detected: ${issue.text}. ${issue.suggestion}`,
+          severity: issue.severity === 'warning' ? 'warning' : 'info',
+          range: {
+            start: { line, character: 0 },
+            end: { line, character: doc.lines[line]?.length || 0 },
+          },
+          analyzer: 'ambiguity-detection',
+          suggestion: issue.suggestion,
+        });
+      }
+    } catch {
+      // JSON parse error, skip
     }
 
     return results;
@@ -107,7 +188,7 @@ If no contradictions found, return {"contradictions": []}`;
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = JSON.parse(response);
+      const parsed = this.extractJSON(response);
       for (const contradiction of parsed.contradictions || []) {
         // Find actual line numbers by searching for the instruction text
         const line1 = this.findLineNumber(doc, contradiction.instruction1);
@@ -178,7 +259,7 @@ If no issues found, return {"issues": []}`;
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = JSON.parse(response);
+      const parsed = this.extractJSON(response);
       for (const issue of parsed.issues || []) {
         results.push({
           code: 'persona-inconsistency',
@@ -234,7 +315,7 @@ If no vulnerabilities found, return {"vulnerabilities": []}`;
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = JSON.parse(response);
+      const parsed = this.extractJSON(response);
       for (const vuln of parsed.vulnerabilities || []) {
         const line = this.findLineNumber(doc, vuln.vulnerable_text);
         
@@ -290,7 +371,7 @@ Respond in JSON format:
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = JSON.parse(response);
+      const parsed = this.extractJSON(response);
       
       if (parsed.overall_complexity === 'very-high') {
         results.push({
@@ -368,7 +449,7 @@ Respond in JSON format:
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = JSON.parse(response);
+      const parsed = this.extractJSON(response);
       const predictions = parsed.predictions;
 
       if (predictions) {
@@ -491,7 +572,7 @@ Respond in JSON format:
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = JSON.parse(response);
+      const parsed = this.extractJSON(response);
       const analysis = parsed.coverage_analysis;
 
       if (analysis) {
@@ -561,6 +642,86 @@ Respond in JSON format:
   }
 
   /**
+   * Composition Conflict Analysis (Tier 2 - LLM, one-hop)
+   * Detects conflicts across current prompt and directly linked prompts
+   */
+  private async analyzeCompositionConflicts(doc: PromptDocument): Promise<AnalysisResult[]> {
+    if (!doc.compositionLinks || doc.compositionLinks.length === 0) {
+      return [];
+    }
+
+    const composedText = this.buildComposedText(doc);
+    if (!composedText) {
+      return [];
+    }
+
+    const prompt = `Analyze the composed prompt for conflicts across files. Look for:
+1. Behavioral conflicts (e.g., "Never refuse" vs "Refuse harmful requests")
+2. Format conflicts (e.g., "10 words" vs "include code block")
+3. Priority conflicts (two sections both claiming highest priority)
+
+Composed prompt:
+"""
+${composedText}
+"""
+
+Respond in JSON format:
+{
+  "conflicts": [
+    {
+      "summary": "short description",
+      "instruction1": "exact text of first conflicting instruction",
+      "instruction2": "exact text of second conflicting instruction",
+      "severity": "error" | "warning",
+      "suggestion": "how to resolve"
+    }
+  ]
+}
+
+If no conflicts found, return {"conflicts": []}`;
+
+    const response = await this.callLLM(prompt);
+    const results: AnalysisResult[] = [];
+
+    try {
+      const parsed = this.extractJSON(response);
+      for (const conflict of parsed.conflicts || []) {
+        results.push({
+          code: 'composition-conflict',
+          message: `Composition conflict: ${conflict.summary}. "${conflict.instruction1}" vs "${conflict.instruction2}"`,
+          severity: conflict.severity === 'error' ? 'error' : 'warning',
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 1 },
+          },
+          analyzer: 'composition-conflicts',
+          suggestion: conflict.suggestion,
+        });
+      }
+    } catch {
+      // JSON parse error, skip
+    }
+
+    return results;
+  }
+
+  private buildComposedText(doc: PromptDocument): string {
+    const parts: string[] = [doc.text];
+
+    for (const link of doc.compositionLinks) {
+      if (!link.resolvedPath) continue;
+      try {
+        const linkedText = fs.readFileSync(link.resolvedPath, 'utf8');
+        parts.push(`\n\n--- begin ${link.target} ---\n${linkedText}\n--- end ${link.target} ---\n`);
+      } catch {
+        // Missing/unreadable files handled by static analyzer
+      }
+    }
+
+    return parts.join('\n');
+  }
+
+  /**
    * Find the line number where a piece of text appears
    */
   private findLineNumber(doc: PromptDocument, text: string): number {
@@ -586,75 +747,18 @@ Respond in JSON format:
   }
 
   /**
-   * Call the LLM API
+   * Call the LLM via the vscode.lm proxy (Copilot)
    */
   private async callLLM(prompt: string): Promise<string> {
-    if (!this.apiKey) {
-      throw new Error('No API key configured');
+    if (!this.proxyFn) {
+      throw new Error('No language model available. Install GitHub Copilot.');
     }
 
-    // Detect provider from API key format or environment
-    const isAnthropic = this.apiKey.startsWith('sk-ant-') || process.env.ANTHROPIC_API_KEY;
-
-    if (isAnthropic) {
-      return this.callAnthropic(prompt);
-    } else {
-      return this.callOpenAI(prompt);
+    const systemPrompt = 'You are a prompt analysis expert. Analyze prompts for issues and respond in JSON format only.';
+    const result = await this.proxyFn({ prompt, systemPrompt });
+    if (result.error) {
+      throw new Error(result.error);
     }
-  }
-
-  private async callOpenAI(prompt: string): Promise<string> {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a prompt analysis expert. Analyze prompts for issues and respond in JSON format only.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.1,
-        max_tokens: 2000,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.status}`);
-    }
-
-    const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content || '{}';
-  }
-
-  private async callAnthropic(prompt: string): Promise<string> {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.apiKey!,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-3-sonnet-20240229',
-        max_tokens: 2000,
-        messages: [
-          { role: 'user', content: prompt },
-        ],
-        system: 'You are a prompt analysis expert. Analyze prompts for issues and respond in JSON format only.',
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Anthropic API error: ${response.status}`);
-    }
-
-    const data = await response.json() as { content: Array<{ text: string }> };
-    return data.content[0]?.text || '{}';
+    return result.text;
   }
 }

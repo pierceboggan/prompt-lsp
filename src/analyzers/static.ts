@@ -1,4 +1,5 @@
 import { Range } from 'vscode-languageserver';
+import fs from 'fs';
 import { PromptDocument, AnalysisResult, InstructionStrength, TokenInfo } from '../types';
 import { encoding_for_model, TiktokenModel } from 'tiktoken';
 
@@ -106,6 +107,7 @@ export class StaticAnalyzer {
     results.push(...this.analyzeRedundancy(doc));
     results.push(...this.analyzeExamples(doc));
     results.push(...this.analyzeTokenUsage(doc));
+    results.push(...this.analyzeCompositionLinks(doc));
 
     return results;
   }
@@ -725,6 +727,48 @@ export class StaticAnalyzer {
             end: { line: 0, character: 1 },
           },
           analyzer: 'token-analysis',
+        });
+      }
+    }
+
+    return results;
+  }
+
+  // Cross-Prompt Composition Validation (Tier 2 - MVP)
+  private analyzeCompositionLinks(doc: PromptDocument): AnalysisResult[] {
+    const results: AnalysisResult[] = [];
+
+    if (!doc.compositionLinks || doc.compositionLinks.length === 0) {
+      return results;
+    }
+
+    for (const link of doc.compositionLinks) {
+      if (!link.resolvedPath) {
+        results.push({
+          code: 'composition-unresolved',
+          message: `Unable to resolve composed prompt file: ${link.target}`,
+          severity: 'warning',
+          range: {
+            start: { line: link.line, character: link.column },
+            end: { line: link.line, character: link.endColumn },
+          },
+          analyzer: 'composition-validation',
+        });
+        continue;
+      }
+
+      try {
+        fs.accessSync(link.resolvedPath, fs.constants.R_OK);
+      } catch {
+        results.push({
+          code: 'composition-missing',
+          message: `Composed prompt file not found or unreadable: ${link.target}`,
+          severity: 'error',
+          range: {
+            start: { line: link.line, character: link.column },
+            end: { line: link.line, character: link.endColumn },
+          },
+          analyzer: 'composition-validation',
         });
       }
     }

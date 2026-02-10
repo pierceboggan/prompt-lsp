@@ -17,11 +17,14 @@ import {
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 import { StaticAnalyzer } from './analyzers/static';
 import { LLMAnalyzer } from './analyzers/llm';
 import { AnalysisCache } from './cache';
-import { PromptDocument, AnalysisResult } from './types';
+import { PromptDocument, AnalysisResult, CompositionLink, LLMProxyRequest, LLMProxyResponse } from './types';
 
 // Create a connection for the server
 const connection = createConnection(ProposedFeatures.all);
@@ -36,7 +39,9 @@ const cache = new AnalysisCache();
 
 // Debounce timers for analysis
 const debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+const llmDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
 const DEBOUNCE_DELAY = 500; // ms
+const LLM_DEBOUNCE_DELAY = 2000; // ms - longer delay for LLM to avoid excessive API calls
 
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
@@ -78,28 +83,71 @@ connection.onInitialize((params: InitializeParams) => {
 
 connection.onInitialized(() => {
   connection.console.log('Prompt LSP initialized');
+
+  // Set up LLM proxy: server sends requests to client, client calls vscode.lm
+  llmAnalyzer.setProxyFn(async (request: LLMProxyRequest): Promise<LLMProxyResponse> => {
+    try {
+      connection.console.log('[LLM Proxy] Sending request to client...');
+      const response = await connection.sendRequest<LLMProxyResponse>('promptLSP/llmRequest', request);
+      if (response.error) {
+        connection.console.log(`[LLM Proxy] Client returned error: ${response.error}`);
+      } else {
+        connection.console.log(`[LLM Proxy] Got response (${response.text.length} chars)`);
+      }
+      return response;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Proxy request failed';
+      connection.console.log(`[LLM Proxy] Request failed: ${msg}`);
+      return {
+        text: '{}',
+        error: msg,
+      };
+    }
+  });
+
+  // Fetch initial configuration
+  updateConfiguration();
 });
 
-// Handle document changes - static analysis only on keystroke
+// Watch for configuration changes
+connection.onDidChangeConfiguration(() => {
+  updateConfiguration();
+});
+
+async function updateConfiguration(): Promise<void> {
+  // No LLM-specific config needed — Copilot is auto-detected via vscode.lm
+}
+
+// Handle document changes - static analysis immediately, LLM analysis after pause
 documents.onDidChangeContent((change) => {
   const uri = change.document.uri;
 
-  // Cancel existing debounce timer
+  // Cancel existing debounce timers
   const existingTimer = debounceTimers.get(uri);
   if (existingTimer) {
     clearTimeout(existingTimer);
+  }
+  const existingLLMTimer = llmDebounceTimers.get(uri);
+  if (existingLLMTimer) {
+    clearTimeout(existingLLMTimer);
   }
 
   // Run static analysis immediately
   runStaticAnalysis(change.document);
 
-  // Debounce full analysis
+  // Debounce static refresh
   const timer = setTimeout(() => {
     runDebouncedAnalysis(change.document);
     debounceTimers.delete(uri);
   }, DEBOUNCE_DELAY);
-
   debounceTimers.set(uri, timer);
+
+  // Debounce LLM analysis with longer delay
+  const llmTimer = setTimeout(() => {
+    runFullAnalysis(change.document);
+    llmDebounceTimers.delete(uri);
+  }, LLM_DEBOUNCE_DELAY);
+  llmDebounceTimers.set(uri, llmTimer);
 });
 
 // Full analysis on save
@@ -132,12 +180,14 @@ async function runDebouncedAnalysis(textDocument: TextDocument): Promise<void> {
 
 // Run full analysis including LLM (on save)
 async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
+  connection.console.log(`[Analysis] Running full analysis on ${textDocument.uri}`);
   const promptDoc = parsePromptDocument(textDocument);
-  const contentHash = cache.computeHash(textDocument.getText());
+  const contentHash = computeCompositeHash(textDocument, promptDoc);
 
   // Check cache first
   const cachedResults = cache.get(contentHash);
   if (cachedResults) {
+    connection.console.log('[Analysis] Using cached results');
     const diagnostics = resultsTodiagnostics(cachedResults);
     connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
     return;
@@ -145,9 +195,12 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
 
   // Run static analysis
   const staticResults = staticAnalyzer.analyze(promptDoc);
+  connection.console.log(`[Analysis] Static: ${staticResults.length} issues`);
 
   // Run LLM analysis
+  connection.console.log(`[Analysis] LLM available: ${llmAnalyzer.isAvailable()}`);
   const llmResults = await llmAnalyzer.analyze(promptDoc);
+  connection.console.log(`[Analysis] LLM: ${llmResults.length} issues`);
 
   // Combine results
   const allResults = [...staticResults, ...llmResults];
@@ -158,6 +211,25 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
   // Send diagnostics
   const diagnostics = resultsTodiagnostics(allResults);
   connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+  connection.console.log(`[Analysis] Sent ${diagnostics.length} diagnostics`);
+}
+
+function computeCompositeHash(textDocument: TextDocument, promptDoc: PromptDocument): string {
+  let compositeText = textDocument.getText();
+
+  if (promptDoc.compositionLinks && promptDoc.compositionLinks.length > 0) {
+    for (const link of promptDoc.compositionLinks) {
+      if (!link.resolvedPath) continue;
+      try {
+        const linkedText = fs.readFileSync(link.resolvedPath, 'utf8');
+        compositeText += `\n\n--- link:${link.target} ---\n${linkedText}`;
+      } catch {
+        // Missing/unreadable links are handled by static analyzer
+      }
+    }
+  }
+
+  return cache.computeHash(compositeText);
 }
 
 // Parse text document into prompt document structure
@@ -205,13 +277,101 @@ function parsePromptDocument(textDocument: TextDocument): PromptDocument {
     });
   }
 
+  const compositionLinks: CompositionLink[] = [];
+  const documentDir = getDocumentDir(textDocument.uri);
+  const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+
+  lines.forEach((line, lineIndex) => {
+    let match;
+    while ((match = linkPattern.exec(line)) !== null) {
+      const rawTarget = match[2].trim();
+      const target = normalizeMarkdownLinkTarget(rawTarget);
+      if (!target) continue;
+
+      const targetWithoutAnchor = target.split('#')[0];
+      if (!targetWithoutAnchor) continue;
+
+      if (!isPromptFile(targetWithoutAnchor)) continue;
+
+      const resolvedPath = resolveLinkPath(targetWithoutAnchor, documentDir);
+      compositionLinks.push({
+        target: targetWithoutAnchor,
+        resolvedPath,
+        line: lineIndex,
+        column: match.index,
+        endColumn: match.index + match[0].length,
+      });
+    }
+  });
+
   return {
     uri: textDocument.uri,
     text,
     lines,
     variables,
     sections,
+    compositionLinks,
   };
+}
+
+function getDocumentDir(uri: string): string | undefined {
+  try {
+    const filePath = fileURLToPath(uri);
+    return path.dirname(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeMarkdownLinkTarget(target: string): string | undefined {
+  let cleaned = target.trim();
+
+  if (cleaned.startsWith('<') && cleaned.endsWith('>')) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+
+  if (!cleaned || cleaned.startsWith('#')) {
+    return undefined;
+  }
+
+  if (/^(https?:|mailto:)/i.test(cleaned)) {
+    return undefined;
+  }
+
+  const match = cleaned.match(/^([^\s]+)(?:\s+['"][^'"]*['"])?$/);
+  return match ? match[1] : cleaned;
+}
+
+function resolveLinkPath(target: string, documentDir?: string): string | undefined {
+  if (!documentDir) return undefined;
+
+  if (target.startsWith('file://')) {
+    try {
+      return fileURLToPath(target);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (path.isAbsolute(target)) {
+    return target;
+  }
+
+  return path.resolve(documentDir, target);
+}
+
+function isPromptFile(target: string): boolean {
+  const lower = target.toLowerCase();
+  return (
+    lower.endsWith('.prompt.md') ||
+    lower.endsWith('.system.md') ||
+    lower.endsWith('.agent.md') ||
+    isSkillMarkdownPath(lower)
+  );
+}
+
+function isSkillMarkdownPath(target: string): boolean {
+  return target.endsWith('.md') && /(^|[\\/])skills[\\/]/.test(target);
 }
 
 // Convert analysis results to LSP diagnostics
@@ -357,14 +517,27 @@ connection.onDocumentSymbol((params) => {
   }));
 });
 
-// Make the text document manager listen on the connection
-documents.listen(connection);
-
-// Listen on the connection
-connection.listen();
-
 // Handle clear cache notification from client
 connection.onNotification('promptLSP/clearCache', () => {
   cache.clear();
   connection.console.log('Analysis cache cleared');
 });
+
+// Handle manual analysis trigger from client
+connection.onNotification('promptLSP/analyze', (params: { uri: string }) => {
+  const document = documents.get(params.uri);
+  if (document) {
+    // Clear cache for this document so we get fresh results
+    cache.clear();
+    connection.console.log(`[Analysis] Manual analysis triggered for ${params.uri}`);
+    runFullAnalysis(document);
+  } else {
+    connection.console.log(`[Analysis] No document found for ${params.uri}`);
+  }
+});
+
+// Make the text document manager listen on the connection
+documents.listen(connection);
+
+// Listen on the connection
+connection.listen();

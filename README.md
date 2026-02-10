@@ -56,6 +56,7 @@ The extension automatically recognizes:
 - `*.system.md` - System prompts
 - `*.agent.md` - Agent prompts
 - `*.prompt` - Generic prompt files
+- `**/skills/**/*.md` - Skill markdown files
 
 ### Commands
 

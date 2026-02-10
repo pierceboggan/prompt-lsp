@@ -5,11 +5,27 @@ import {
   LanguageClientOptions,
   ServerOptions,
   TransportKind,
+  RequestType,
 } from 'vscode-languageclient/node';
 
+interface LLMProxyRequest {
+  prompt: string;
+  systemPrompt: string;
+}
+
+interface LLMProxyResponse {
+  text: string;
+  error?: string;
+}
+
+const LLMRequestType = new RequestType<LLMProxyRequest, LLMProxyResponse, void>('promptLSP/llmRequest');
+
 let client: LanguageClient;
+let outputChannel: vscode.OutputChannel;
 
 export function activate(context: vscode.ExtensionContext) {
+  outputChannel = vscode.window.createOutputChannel('Prompt LSP');
+
   // Path to the server module
   const serverModule = context.asAbsolutePath(path.join('..', 'out', 'server.js'));
 
@@ -37,12 +53,16 @@ export function activate(context: vscode.ExtensionContext) {
       { scheme: 'file', pattern: '**/*.prompt' },
       // Also support markdown files with certain patterns
       { scheme: 'file', language: 'markdown', pattern: '**/prompts/**/*.md' },
+      { scheme: 'file', language: 'markdown', pattern: '**/skills/**/*.md' },
     ],
     synchronize: {
       // Notify the server about file changes to prompt files
-      fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{prompt.md,system.md,agent.md,prompt}'),
+      fileEvents: [
+        vscode.workspace.createFileSystemWatcher('**/*.{prompt.md,system.md,agent.md,prompt}'),
+        vscode.workspace.createFileSystemWatcher('**/skills/**/*.md'),
+      ],
     },
-    outputChannel: vscode.window.createOutputChannel('Prompt LSP'),
+    outputChannel,
   };
 
   // Create the language client
@@ -53,14 +73,26 @@ export function activate(context: vscode.ExtensionContext) {
     clientOptions
   );
 
+  // Register the LLM proxy handler — the server will send requests here
+  client.onRequest(LLMRequestType, async (request: LLMProxyRequest): Promise<LLMProxyResponse> => {
+    outputChannel.appendLine('[LLM Proxy] Received request from server');
+    const result = await handleLLMProxyRequest(request);
+    if (result.error) {
+      outputChannel.appendLine(`[LLM Proxy] Error: ${result.error}`);
+    } else {
+      outputChannel.appendLine(`[LLM Proxy] Success (${result.text.length} chars)`);
+    }
+    return result;
+  });
+
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('promptLSP.analyzePrompt', () => {
       const editor = vscode.window.activeTextEditor;
       if (editor) {
-        // Force re-analysis by making a fake edit
-        vscode.commands.executeCommand('editor.action.formatDocument');
-        vscode.window.showInformationMessage('Analyzing prompt...');
+        // Send notification to server to trigger full analysis
+        client.sendNotification('promptLSP/analyze', { uri: editor.document.uri.toString() });
+        vscode.window.showInformationMessage('Running prompt analysis (including LLM)...');
       }
     })
   );
@@ -129,6 +161,63 @@ export function activate(context: vscode.ExtensionContext) {
   console.log('Prompt LSP extension activated');
 }
 
+/**
+ * Handle LLM proxy requests from the language server using vscode.lm API.
+ * This lets the extension use the user's Copilot subscription instead of requiring API keys.
+ */
+async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxyResponse> {
+  try {
+    // Check if vscode.lm is available
+    if (!vscode.lm || !vscode.lm.selectChatModels) {
+      return { text: '{}', error: 'vscode.lm API not available — install GitHub Copilot extension' };
+    }
+
+    outputChannel.appendLine('[LLM Proxy] Selecting chat models...');
+
+    // Select a chat model — prefer Copilot models
+    let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+    outputChannel.appendLine(`[LLM Proxy] gpt-4o models found: ${models.length}`);
+
+    if (models.length === 0) {
+      models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+      outputChannel.appendLine(`[LLM Proxy] Any Copilot models found: ${models.length}`);
+    }
+
+    if (models.length === 0) {
+      models = await vscode.lm.selectChatModels();
+      outputChannel.appendLine(`[LLM Proxy] Any models found: ${models.length}`);
+    }
+
+    if (models.length === 0) {
+      return { text: '{}', error: 'No language models available — sign in to GitHub Copilot' };
+    }
+
+    const model = models[0];
+    outputChannel.appendLine(`[LLM Proxy] Using model: ${model.name} (${model.vendor}/${model.family})`);
+
+    // Build messages
+    const messages = [
+      vscode.LanguageModelChatMessage.User(request.systemPrompt + '\n\n' + request.prompt),
+    ];
+
+    // Send the request
+    const tokenSource = new vscode.CancellationTokenSource();
+    const response = await model.sendRequest(messages, {}, tokenSource.token);
+
+    // Collect the streamed response
+    let text = '';
+    for await (const part of response.text) {
+      text += part;
+    }
+
+    return { text };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    outputChannel.appendLine(`[LLM Proxy] Error: ${message}`);
+    return { text: '{}', error: `vscode.lm request failed: ${message}` };
+  }
+}
+
 function isPromptDocument(document: vscode.TextDocument): boolean {
   const fileName = document.fileName.toLowerCase();
   return (
@@ -136,8 +225,13 @@ function isPromptDocument(document: vscode.TextDocument): boolean {
     fileName.endsWith('.prompt.md') ||
     fileName.endsWith('.system.md') ||
     fileName.endsWith('.agent.md') ||
-    fileName.endsWith('.prompt')
+    fileName.endsWith('.prompt') ||
+    isSkillMarkdown(fileName)
   );
+}
+
+function isSkillMarkdown(fileName: string): boolean {
+  return fileName.endsWith('.md') && /(^|[\\/])skills[\\/]/.test(fileName);
 }
 
 export function deactivate(): Thenable<void> | undefined {
