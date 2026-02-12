@@ -98,7 +98,13 @@ export function resolveLinkPath(target: string, documentDir?: string, workspaceR
     resolved = path.resolve(documentDir, target);
   }
 
-  if (resolved && workspaceRoot && !isWithinDirectory(resolved, workspaceRoot)) {
+  // When workspaceRoot is provided, enforce containment; when absent, deny absolute paths as a safe default
+  if (resolved && workspaceRoot) {
+    if (!isWithinDirectory(resolved, workspaceRoot)) {
+      return undefined;
+    }
+  } else if (resolved && path.isAbsolute(target)) {
+    // No workspace root to validate against — deny absolute paths
     return undefined;
   }
 
@@ -113,7 +119,7 @@ function isWithinDirectory(filePath: string, directory: string): boolean {
 
 export function isPromptFile(target: string): boolean {
   const lower = target.toLowerCase();
-  const baseName = lower.split(/[\/]/).pop() || '';
+  const baseName = lower.split(/[\\/]/).pop() || '';
   return (
     lower.endsWith('.prompt.md') ||
     lower.endsWith('.system.md') ||
@@ -127,8 +133,8 @@ export function isPromptFile(target: string): boolean {
 
 export function isSkillMarkdownPath(target: string): boolean {
   if (!target.endsWith('.md')) return false;
-  return /(^|[\/])\.?(github|claude)[\/]skills[\/]/.test(target) ||
-         /(^|[\/])skills[\/]/.test(target);
+  return /(^|[\\/])\.?(github|claude)[\\/]skills[\\/]/.test(target) ||
+         /(^|[\\/])skills[\\/]/.test(target);
 }
 
 export interface ParsePromptDocumentOptions {
@@ -143,9 +149,9 @@ export function parsePromptDocument(options: ParsePromptDocumentOptions): Prompt
 
   // Extract variables like {{variable_name}}
   const variables: Map<string, number[]> = new Map();
-  const variablePattern = /\{\{(\w+)\}\}/g;
 
   lines.forEach((line, lineIndex) => {
+    const variablePattern = /\{\{(\w+)\}\}/g;
     let match;
     while ((match = variablePattern.exec(line)) !== null) {
       const varName = match[1];
@@ -183,9 +189,9 @@ export function parsePromptDocument(options: ParsePromptDocumentOptions): Prompt
 
   const compositionLinks: CompositionLink[] = [];
   const documentDir = getDocumentDir(uri);
-  const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
 
   lines.forEach((line, lineIndex) => {
+    const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
     let match;
     while ((match = linkPattern.exec(line)) !== null) {
       const rawTarget = match[2].trim();

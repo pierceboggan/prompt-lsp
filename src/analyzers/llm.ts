@@ -8,6 +8,12 @@ import { PromptDocument, AnalysisResult, LLMProxyFn } from '../types';
 export class LLMAnalyzer {
   private proxyFn?: LLMProxyFn;
 
+  /** Maximum total characters to include in composed text sent to LLM */
+  private static readonly MAX_COMPOSED_SIZE = 100_000;
+
+  /** Minimum document length (chars) to warrant LLM analysis — skip trivial/empty prompts */
+  private static readonly MIN_CONTENT_LENGTH = 20;
+
   /**
    * Extract JSON from an LLM response that may be wrapped in markdown code fences.
    */
@@ -46,6 +52,12 @@ export class LLMAnalyzer {
         },
         analyzer: 'llm-analyzer',
       }];
+    }
+
+    // Skip LLM analysis for trivial/very short prompts to avoid unnecessary API calls
+    const contentText = doc.text.replace(/^---[\s\S]*?---\s*/, '').trim();
+    if (contentText.length < LLMAnalyzer.MIN_CONTENT_LENGTH) {
+      return [];
     }
 
     const results: AnalysisResult[] = [];
@@ -209,7 +221,7 @@ If no contradictions found, return {"contradictions": []}`;
           });
         }
       }
-    } catch (e) {
+    } catch {
       // JSON parse error, skip
     }
 
@@ -266,7 +278,7 @@ If no issues found, return {"issues": []}`;
           suggestion: issue.suggestion,
         });
       }
-    } catch (e) {
+    } catch {
       // JSON parse error, skip
     }
 
@@ -336,7 +348,7 @@ Respond in JSON format:
           suggestion: issue.suggestion,
         });
       }
-    } catch (e) {
+    } catch {
       // JSON parse error, skip
     }
 
@@ -463,7 +475,7 @@ Respond in JSON format:
           analyzer: 'output-prediction',
         });
       }
-    } catch (e) {
+    } catch {
       // JSON parse error, skip
     }
 
@@ -575,7 +587,7 @@ Respond in JSON format:
           });
         }
       }
-    } catch (e) {
+    } catch {
       // JSON parse error, skip
     }
 
@@ -649,13 +661,24 @@ If no conflicts found, return {"conflicts": []}`;
   }
 
   private async buildComposedText(doc: PromptDocument): Promise<string> {
+    const delimiter = '<DOCUMENT_TO_ANALYZE>';
+    const closingDelimiter = '</DOCUMENT_TO_ANALYZE>';
     const parts: string[] = [doc.text];
+    let totalSize = doc.text.length;
 
     for (const link of doc.compositionLinks) {
       if (!link.resolvedPath) continue;
+      if (totalSize >= LLMAnalyzer.MAX_COMPOSED_SIZE) break;
       try {
-        const linkedText = await fs.promises.readFile(link.resolvedPath, 'utf8');
+        let linkedText = await fs.promises.readFile(link.resolvedPath, 'utf8');
+        // Strip delimiter markers from linked files to prevent injection boundary spoofing
+        linkedText = linkedText.split(delimiter).join('').split(closingDelimiter).join('');
+        const remaining = LLMAnalyzer.MAX_COMPOSED_SIZE - totalSize;
+        if (linkedText.length > remaining) {
+          linkedText = linkedText.slice(0, remaining);
+        }
         parts.push(`\n\n--- begin ${link.target} ---\n${linkedText}\n--- end ${link.target} ---\n`);
+        totalSize += linkedText.length;
       } catch {
         // Missing/unreadable files handled by static analyzer
       }

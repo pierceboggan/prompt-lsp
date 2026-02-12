@@ -9,7 +9,7 @@
     "build": "npm run compile && cd client && npm run compile",
     "build:all": "npm run compile && cd client && npm install && npm run compile",
     "test": "vitest run",
-    "lint": "eslint src",
+    "lint": "eslint src && cd client && npx eslint src",
     "clean": "rm -rf out && cd client && rm -rf out",
     "preinstall": "cd client && npm install"
   },

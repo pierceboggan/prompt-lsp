@@ -14,7 +14,6 @@ import {
   HoverParams,
   Hover,
   MarkupKind,
-  CodeLens,
   Location,
 } from 'vscode-languageserver/node';
 
@@ -173,14 +172,14 @@ async function updateConfiguration(): Promise<void> {
   }
 }
 
-// Handle document changes - static analysis immediately, LLM analysis after pause
+// Handle document changes - static analysis immediately, full static after pause, LLM only on save
 documents.onDidChangeContent((change) => {
   const uri = change.document.uri;
 
-  // Cancel existing LLM debounce timer
-  const existingLLMTimer = llmDebounceTimers.get(uri);
-  if (existingLLMTimer) {
-    clearTimeout(existingLLMTimer);
+  // Cancel existing debounce timer
+  const existingTimer = llmDebounceTimers.get(uri);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
   }
 
   // Skip analysis for initial content event on open (onDidOpen already triggers it)
@@ -192,23 +191,24 @@ documents.onDidChangeContent((change) => {
   // Run quick static analysis immediately (cheap checks only, no token counting or FS access)
   runStaticAnalysis(change.document);
 
-  // Debounce full analysis (including LLM) with longer delay
-  const llmTimer = setTimeout(() => {
-    runFullAnalysis(change.document);
+  // Debounce FULL STATIC analysis (with token counting and composition links) — but NOT LLM
+  // LLM analysis is too expensive to run on every typing pause; it only runs on save/open/manual
+  const timer = setTimeout(() => {
+    runFullAnalysis(change.document, { skipLLM: true });
     llmDebounceTimers.delete(uri);
   }, LLM_DEBOUNCE_DELAY);
-  llmDebounceTimers.set(uri, llmTimer);
+  llmDebounceTimers.set(uri, timer);
 });
 
-// Full analysis on save
+// Full analysis including LLM on save
 documents.onDidSave((event) => {
-  runFullAnalysis(event.document);
+  runFullAnalysis(event.document, { skipLLM: false });
 });
 
-// Full analysis when document is opened
+// Full analysis including LLM when document is opened
 documents.onDidOpen((event) => {
   recentlyOpened.add(event.document.uri);
-  runFullAnalysis(event.document);
+  runFullAnalysis(event.document, { skipLLM: false });
 });
 
 // Run quick static analysis only (fast, on keystroke — no token counting or FS access)
@@ -234,8 +234,8 @@ async function runStaticAnalysis(textDocument: TextDocument): Promise<void> {
   connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
 
-// Run full analysis including LLM (on save)
-async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
+// Run full analysis — LLM analysis only when skipLLM is false (save/open/manual)
+async function runFullAnalysis(textDocument: TextDocument, options: { skipLLM: boolean } = { skipLLM: false }): Promise<void> {
   const uri = textDocument.uri;
   const version = textDocument.version;
 
@@ -244,7 +244,10 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
 
   connection.console.log(`[Analysis] Running full analysis on ${uri}`);
   const promptDoc = getCachedPromptDocument(textDocument);
-  const contentHash = await computeCompositeHash(textDocument, promptDoc);
+
+  // Read linked files once and reuse across hashing, static analysis, and LLM analysis
+  const linkedContents: Map<string, string> = new Map();
+  const contentHash = await computeCompositeHash(textDocument, promptDoc, linkedContents);
 
   // Discard if document changed since analysis started
   if (documentVersions.get(uri) !== version) {
@@ -270,9 +273,9 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
   // Store static results for CodeLens issue summary
   lastStaticAnalysisResults.set(uri, staticResults);
 
-  // Run LLM analysis (if enabled and available)
+  // Run LLM analysis (if enabled, available, and not skipped for keystroke path)
   let llmResults: AnalysisResult[] = [];
-  if (serverConfig.enableLLMAnalysis) {
+  if (!options.skipLLM && serverConfig.enableLLMAnalysis) {
     connection.console.log(`[Analysis] LLM available: ${llmAnalyzer.isAvailable()}`);
     llmResults = await llmAnalyzer.analyze(promptDoc);
     connection.console.log(`[Analysis] LLM: ${llmResults.length} issues`);
@@ -296,15 +299,19 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
   connection.console.log(`[Analysis] Sent ${diagnostics.length} diagnostics`);
 }
 
-async function computeCompositeHash(textDocument: TextDocument, promptDoc: PromptDocument): Promise<string> {
+async function computeCompositeHash(textDocument: TextDocument, promptDoc: PromptDocument, linkedContents: Map<string, string>): Promise<string> {
   let compositeText = textDocument.getText();
 
   if (promptDoc.compositionLinks && promptDoc.compositionLinks.length > 0) {
     for (const link of promptDoc.compositionLinks) {
       if (!link.resolvedPath) continue;
       try {
-        const linkedText = await fs.promises.readFile(link.resolvedPath, 'utf8');
-        compositeText += `\n\n--- link:${link.target} ---\n${linkedText}`;
+        let content = linkedContents.get(link.resolvedPath);
+        if (content === undefined) {
+          content = await fs.promises.readFile(link.resolvedPath, 'utf8');
+          linkedContents.set(link.resolvedPath, content);
+        }
+        compositeText += `\n\n--- link:${link.target} ---\n${content}`;
       } catch {
         // Missing/unreadable links are handled by static analyzer
       }
@@ -587,7 +594,7 @@ connection.onNotification('promptLSP/analyze', (params: { uri: string }) => {
     // Clear cache for this document so we get fresh results
     cache.clear();
     connection.console.log(`[Analysis] Manual analysis triggered for ${params.uri}`);
-    runFullAnalysis(document);
+    runFullAnalysis(document, { skipLLM: false });
   } else {
     connection.console.log(`[Analysis] No document found for ${params.uri}`);
   }

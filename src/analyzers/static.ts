@@ -1,6 +1,5 @@
-import { Range } from 'vscode-languageserver';
 import fs from 'fs';
-import { PromptDocument, AnalysisResult, InstructionStrength, TokenInfo, PromptFileType } from '../types';
+import { PromptDocument, AnalysisResult, TokenInfo } from '../types';
 import { encoding_for_model, TiktokenModel } from 'tiktoken';
 
 export class StaticAnalyzer {

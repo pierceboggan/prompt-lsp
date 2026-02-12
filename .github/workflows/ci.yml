@@ -38,8 +38,8 @@ jobs:
       - name: Build client
         run: cd client && npm run compile
 
-      - name: Run tests
-        run: npm test
-
       - name: Lint
         run: npm run lint
+
+      - name: Run tests
+        run: npm test

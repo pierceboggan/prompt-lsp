@@ -130,6 +130,8 @@ describe('LLMAnalyzer', () => {
       const results = await analyzer.analyze(doc);
       const contradictions = results.filter(r => r.code === 'contradiction');
       expect(contradictions.length).toBeGreaterThan(0);
+      // Verify line numbers resolved correctly
+      expect(contradictions[0].range.start.line).toBe(0); // "Be concise" on line 0
     });
 
     it('should handle empty LLM responses gracefully', async () => {
@@ -223,6 +225,8 @@ describe('LLMAnalyzer', () => {
       const results = await analyzer.analyze(doc);
       const ambiguity = results.filter(r => r.code === 'ambiguity-llm');
       expect(ambiguity.length).toBeGreaterThan(0);
+      // Verify findLineNumber resolved the correct line (line 0 contains "be professional")
+      expect(ambiguity[0].range.start.line).toBe(0);
     });
   });
 });

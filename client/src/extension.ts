@@ -157,6 +157,9 @@ export function activate(context: vscode.ExtensionContext) {
   // Update token count on active editor change
   let tokenUpdateTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // Dispose the debounce timer on deactivation
+  context.subscriptions.push({ dispose: () => { if (tokenUpdateTimer) clearTimeout(tokenUpdateTimer); } });
+
   const updateTokenCount = () => {
     const editor = vscode.window.activeTextEditor;
     if (editor && isPromptDocument(editor.document)) {
@@ -168,12 +171,13 @@ export function activate(context: vscode.ExtensionContext) {
 
       // Debounced accurate token count via LSP
       if (tokenUpdateTimer) clearTimeout(tokenUpdateTimer);
+      const editorUri = editor.document.uri.toString();
       tokenUpdateTimer = setTimeout(async () => {
         try {
           const count = await client.sendRequest<number>('promptLSP/tokenCount', {
-            uri: editor.document.uri.toString(),
+            uri: editorUri,
           });
-          if (vscode.window.activeTextEditor?.document === editor.document) {
+          if (vscode.window.activeTextEditor?.document.uri.toString() === editorUri) {
             tokenStatusBar.text = `$(symbol-number) ${count} tokens`;
             tokenStatusBar.tooltip = 'Token count via tiktoken (click for details)';
           }
@@ -282,20 +286,15 @@ async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxy
     ];
 
     // Send the request
-    const tokenSource = new vscode.CancellationTokenSource();
-    try {
-      const response = await model.sendRequest(messages, {}, tokenSource.token);
+    const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
 
-      // Collect the streamed response
-      let text = '';
-      for await (const part of response.text) {
-        text += part;
-      }
-
-      return { text };
-    } finally {
-      tokenSource.dispose();
+    // Collect the streamed response
+    let text = '';
+    for await (const part of response.text) {
+      text += part;
     }
+
+    return { text };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     outputChannel.appendLine(`[LLM Proxy] Error: ${message}`);
