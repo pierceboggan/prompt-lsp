@@ -1,60 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { StaticAnalyzer } from '../analyzers/static';
-import { createCodeLenses, findCompositionLinkAtPosition, findFirstVariableOccurrence, getVariableNameAtPosition, PROMPT_LSP_NOOP_COMMAND } from '../lspFeatures';
-import { AnalysisResult, PromptDocument } from '../types';
-
-function makeDoc(text: string): PromptDocument {
-  const lines = text.split('\n');
-  const variables = new Map<string, number[]>();
-  const variablePattern = /\{\{(\w+)\}\}/g;
-
-  lines.forEach((line, lineIndex) => {
-    let match: RegExpExecArray | null;
-    variablePattern.lastIndex = 0;
-    while ((match = variablePattern.exec(line)) !== null) {
-      const varName = match[1];
-      const positions = variables.get(varName) || [];
-      positions.push(lineIndex);
-      variables.set(varName, positions);
-    }
-  });
-
-  const sections: { name: string; startLine: number; endLine: number }[] = [];
-  let currentSection: { name: string; startLine: number } | null = null;
-
-  lines.forEach((line, lineIndex) => {
-    const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (headerMatch) {
-      if (currentSection !== null) {
-        sections.push({
-          name: currentSection.name,
-          startLine: currentSection.startLine,
-          endLine: lineIndex - 1,
-        });
-      }
-      currentSection = { name: headerMatch[2], startLine: lineIndex };
-    }
-  });
-
-  if (currentSection !== null) {
-    sections.push({
-      name: (currentSection as { name: string; startLine: number }).name,
-      startLine: (currentSection as { name: string; startLine: number }).startLine,
-      endLine: lines.length - 1,
-    });
-  }
-
-  return {
-    uri: 'file:///test.prompt.md',
-    text,
-    lines,
-    variables,
-    sections,
-    compositionLinks: [],
-    fileType: 'prompt',
-  };
-}
+import { createCodeLenses, findCompositionLinkAtPosition, findFirstVariableOccurrence, getVariableNameAtPosition, PROMPT_LSP_NOOP_COMMAND, resultsToDiagnostics } from '../lspFeatures';
+import { AnalysisResult } from '../types';
+import { makeDoc } from './helpers';
 
 describe('lspFeatures', () => {
   it('detects variable name at a given cursor position', () => {
@@ -109,5 +58,45 @@ describe('lspFeatures', () => {
       expect(lenses[i + 1].command?.title).toBe(`\u00A7 ${section.name} \u2014 ${expectedTokens} tokens`);
       expect(lenses[i + 1].command?.command).toBe(PROMPT_LSP_NOOP_COMMAND);
     }
+  });
+
+  describe('resultsToDiagnostics', () => {
+    it('maps severity levels correctly', () => {
+      const results: AnalysisResult[] = [
+        { code: 'a', message: 'err', severity: 'error', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, analyzer: 'x' },
+        { code: 'b', message: 'warn', severity: 'warning', range: { start: { line: 1, character: 0 }, end: { line: 1, character: 1 } }, analyzer: 'x' },
+        { code: 'c', message: 'inf', severity: 'info', range: { start: { line: 2, character: 0 }, end: { line: 2, character: 1 } }, analyzer: 'x' },
+        { code: 'd', message: 'hnt', severity: 'hint', range: { start: { line: 3, character: 0 }, end: { line: 3, character: 1 } }, analyzer: 'x' },
+      ];
+
+      const diagnostics = resultsToDiagnostics(results);
+      expect(diagnostics).toHaveLength(4);
+      // DiagnosticSeverity: Error=1, Warning=2, Information=3, Hint=4
+      expect(diagnostics[0].severity).toBe(1);
+      expect(diagnostics[1].severity).toBe(2);
+      expect(diagnostics[2].severity).toBe(3);
+      expect(diagnostics[3].severity).toBe(4);
+    });
+
+    it('includes source and code', () => {
+      const results: AnalysisResult[] = [
+        { code: 'test-code', message: 'msg', severity: 'warning', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, analyzer: 'my-analyzer' },
+      ];
+      const diagnostics = resultsToDiagnostics(results);
+      expect(diagnostics[0].source).toBe('prompt-lsp (my-analyzer)');
+      expect(diagnostics[0].code).toBe('test-code');
+    });
+
+    it('passes suggestion as data', () => {
+      const results: AnalysisResult[] = [
+        { code: 'x', message: 'msg', severity: 'info', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, analyzer: 'a', suggestion: 'fix it' },
+      ];
+      const diagnostics = resultsToDiagnostics(results);
+      expect(diagnostics[0].data).toBe('fix it');
+    });
+
+    it('returns empty array for empty input', () => {
+      expect(resultsToDiagnostics([])).toEqual([]);
+    });
   });
 });

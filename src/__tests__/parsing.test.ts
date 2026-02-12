@@ -167,9 +167,9 @@ describe('resolveLinkPath', () => {
     expect(result).toBe('/workspace/other/file.md');
   });
 
-  it('should resolve without workspace root (no validation)', () => {
+  it('should block path traversal without workspace root', () => {
     const result = resolveLinkPath('../parent.md', '/workspace/dir');
-    expect(result).toBe(path.resolve('/workspace/dir', '../parent.md'));
+    expect(result).toBeUndefined();
   });
 });
 

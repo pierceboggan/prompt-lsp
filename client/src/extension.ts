@@ -272,7 +272,11 @@ async function doSelectModel(): Promise<vscode.LanguageModelChat | undefined> {
   return cachedModel;
 }
 
+const LLM_REQUEST_TIMEOUT_MS = 30_000;
+
 async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxyResponse> {
+  const cts = new vscode.CancellationTokenSource();
+  const timeout = setTimeout(() => cts.cancel(), LLM_REQUEST_TIMEOUT_MS);
   try {
     const model = await selectModel();
 
@@ -286,7 +290,7 @@ async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxy
     ];
 
     // Send the request
-    const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
+    const response = await model.sendRequest(messages, {}, cts.token);
 
     // Collect the streamed response
     let text = '';
@@ -299,6 +303,9 @@ async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxy
     const message = error instanceof Error ? error.message : 'Unknown error';
     outputChannel.appendLine(`[LLM Proxy] Error: ${message}`);
     return { text: '{}', error: `vscode.lm request failed: ${message}` };
+  } finally {
+    clearTimeout(timeout);
+    cts.dispose();
   }
 }
 

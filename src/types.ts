@@ -40,45 +40,6 @@ export interface AnalysisResult {
   suggestion?: string;
 }
 
-export interface Variable {
-  name: string;
-  line: number;
-  column: number;
-  isDefined: boolean;
-  isUsed: boolean;
-}
-
-export interface InstructionStrength {
-  text: string;
-  strength: 'strong' | 'medium' | 'weak';
-  line: number;
-  column: number;
-}
-
-export interface InjectionPoint {
-  variable: string;
-  line: number;
-  column: number;
-  riskLevel: 'high' | 'medium' | 'low';
-  context: string;
-}
-
-export interface Contradiction {
-  instruction1: string;
-  instruction2: string;
-  line1: number;
-  line2: number;
-  severity: 'error' | 'warning';
-  explanation: string;
-}
-
-export interface AmbiguityIssue {
-  text: string;
-  line: number;
-  type: 'quantifier' | 'reference' | 'term' | 'scope';
-  suggestion: string;
-}
-
 export interface TokenInfo {
   totalTokens: number;
   sections: Map<string, number>;
@@ -110,13 +71,6 @@ export interface CacheEntry {
   ttl: number;
 }
 
-export interface PromptLSPConfig {
-  enableLLMAnalysis: boolean;
-  cacheTTL: number; // in seconds
-  targetModel?: string; // Target model for compatibility checks
-  maxTokenBudget?: number;
-}
-
 // LSP proxy types for vscode.lm integration
 export interface LLMProxyRequest {
   prompt: string;
@@ -129,3 +83,75 @@ export interface LLMProxyResponse {
 }
 
 export type LLMProxyFn = (request: LLMProxyRequest) => Promise<LLMProxyResponse>;
+
+// Typed LLM response shapes for extractJSON
+export interface LLMContradictionResponse {
+  contradictions?: {
+    instruction1: string;
+    instruction2: string;
+    severity: 'error' | 'warning';
+    explanation: string;
+    line1_estimate?: number;
+    line2_estimate?: number;
+  }[];
+}
+
+export interface LLMAmbiguityResponse {
+  issues?: {
+    text: string;
+    type: 'quantifier' | 'reference' | 'term' | 'scope' | 'other';
+    severity: 'warning' | 'info';
+    suggestion: string;
+  }[];
+}
+
+export interface LLMPersonaResponse {
+  issues?: {
+    description: string;
+    trait1: string;
+    trait2: string;
+    severity: 'warning' | 'info';
+    suggestion: string;
+  }[];
+}
+
+export interface LLMCognitiveLoadResponse {
+  issues?: {
+    type: string;
+    description: string;
+    severity: 'warning' | 'info';
+    suggestion: string;
+  }[];
+  overall_complexity?: 'low' | 'medium' | 'high' | 'very-high';
+}
+
+export interface LLMOutputShapeResponse {
+  predictions?: {
+    estimated_tokens: number;
+    token_variance: 'low' | 'medium' | 'high';
+    structured_output_requested: boolean;
+    structured_output_compliance: 'high' | 'medium' | 'low';
+    refusal_probability: 'low' | 'medium' | 'high';
+    format_issues?: { issue: string; suggestion: string }[];
+  };
+  warnings?: { message: string; severity: 'warning' | 'info' }[];
+}
+
+export interface LLMCoverageResponse {
+  coverage_analysis?: {
+    well_handled_intents?: string[];
+    coverage_gaps?: { gap: string; impact: 'high' | 'medium' | 'low'; suggestion: string }[];
+    missing_error_handling?: { scenario: string; suggestion: string }[];
+    overall_coverage?: 'comprehensive' | 'adequate' | 'limited' | 'minimal';
+  };
+}
+
+export interface LLMCompositionConflictResponse {
+  conflicts?: {
+    summary: string;
+    instruction1: string;
+    instruction2: string;
+    severity: 'error' | 'warning';
+    suggestion: string;
+  }[];
+}

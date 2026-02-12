@@ -1,8 +1,6 @@
 import {
   createConnection,
   TextDocuments,
-  Diagnostic,
-  DiagnosticSeverity,
   ProposedFeatures,
   InitializeParams,
   TextDocumentSyncKind,
@@ -31,6 +29,7 @@ import {
   findCompositionLinkAtPosition,
   findFirstVariableOccurrence,
   getVariableNameAtPosition,
+  resultsToDiagnostics,
 } from './lspFeatures';
 
 // Create a connection for the server
@@ -52,6 +51,9 @@ const LLM_DEBOUNCE_DELAY = 2000; // ms - longer delay for LLM to avoid excessive
 
 // Parse cache: avoids re-parsing on every CodeLens/Hover/Definition request
 const parsedDocumentCache: Map<string, { version: number; doc: PromptDocument }> = new Map();
+
+// Linked-file cache: avoids re-reading unchanged linked files from disk
+const linkedFileCache: Map<string, { mtime: number; content: string }> = new Map();
 
 let workspaceRoot: string | undefined;
 
@@ -182,10 +184,13 @@ documents.onDidChangeContent((change) => {
     clearTimeout(existingTimer);
   }
 
-  // Skip analysis for initial content event on open (onDidOpen already triggers it)
+  // Skip the synthetic content event fired on open (version 1) — onDidOpen already triggers analysis.
+  // But if version > 1, the user typed before the open analysis finished, so handle normally.
   if (recentlyOpened.has(uri)) {
     recentlyOpened.delete(uri);
-    return;
+    if (change.document.version <= 1) {
+      return;
+    }
   }
 
   // Run quick static analysis immediately (cheap checks only, no token counting or FS access)
@@ -230,7 +235,7 @@ async function runStaticAnalysis(textDocument: TextDocument): Promise<void> {
 
   lastStaticAnalysisResults.set(textDocument.uri, staticResults);
 
-  const diagnostics = resultsTodiagnostics(staticResults);
+  const diagnostics = resultsToDiagnostics(staticResults);
   connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
 
@@ -261,7 +266,7 @@ async function runFullAnalysis(textDocument: TextDocument, options: { skipLLM: b
     connection.console.log('[Analysis] Using cached results');
     // Refresh static-only results for CodeLens issue summary.
     lastStaticAnalysisResults.set(uri, staticAnalyzer.analyze(promptDoc));
-    const diagnostics = resultsTodiagnostics(cachedResults);
+    const diagnostics = resultsToDiagnostics(cachedResults);
     connection.sendDiagnostics({ uri, diagnostics });
     return;
   }
@@ -294,7 +299,7 @@ async function runFullAnalysis(textDocument: TextDocument, options: { skipLLM: b
   cache.set(contentHash, allResults);
 
   // Send diagnostics
-  const diagnostics = resultsTodiagnostics(allResults);
+  const diagnostics = resultsToDiagnostics(allResults);
   connection.sendDiagnostics({ uri, diagnostics });
   connection.console.log(`[Analysis] Sent ${diagnostics.length} diagnostics`);
 }
@@ -308,7 +313,15 @@ async function computeCompositeHash(textDocument: TextDocument, promptDoc: Promp
       try {
         let content = linkedContents.get(link.resolvedPath);
         if (content === undefined) {
-          content = await fs.promises.readFile(link.resolvedPath, 'utf8');
+          const stat = await fs.promises.stat(link.resolvedPath);
+          const mtimeMs = stat.mtimeMs;
+          const cached = linkedFileCache.get(link.resolvedPath);
+          if (cached && cached.mtime === mtimeMs) {
+            content = cached.content;
+          } else {
+            content = await fs.promises.readFile(link.resolvedPath, 'utf8');
+            linkedFileCache.set(link.resolvedPath, { mtime: mtimeMs, content });
+          }
           linkedContents.set(link.resolvedPath, content);
         }
         compositeText += `\n\n--- link:${link.target} ---\n${content}`;
@@ -319,35 +332,6 @@ async function computeCompositeHash(textDocument: TextDocument, promptDoc: Promp
   }
 
   return cache.computeHash(compositeText);
-}
-
-// Convert analysis results to LSP diagnostics
-function resultsTodiagnostics(results: AnalysisResult[]): Diagnostic[] {
-  return results.map((result) => {
-    let severity: DiagnosticSeverity;
-    switch (result.severity) {
-      case 'error':
-        severity = DiagnosticSeverity.Error;
-        break;
-      case 'warning':
-        severity = DiagnosticSeverity.Warning;
-        break;
-      case 'info':
-        severity = DiagnosticSeverity.Information;
-        break;
-      default:
-        severity = DiagnosticSeverity.Hint;
-    }
-
-    return {
-      severity,
-      range: result.range,
-      message: result.message,
-      source: `prompt-lsp (${result.analyzer})`,
-      code: result.code,
-      data: result.suggestion,
-    };
-  });
 }
 
 // Go to Definition for variables and composition links
@@ -621,6 +605,11 @@ documents.onDidClose((event) => {
 
 // Make the text document manager listen on the connection
 documents.listen(connection);
+
+// Dispose tiktoken encoders on shutdown
+connection.onShutdown(() => {
+  staticAnalyzer.dispose();
+});
 
 // Listen on the connection
 connection.listen();

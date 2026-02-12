@@ -41,6 +41,16 @@ export class StaticAnalyzer {
   // Tiktoken encoders cached per model
   private encoders: Map<string, ReturnType<typeof encoding_for_model>> = new Map();
 
+  /**
+   * Free all cached tiktoken WASM encoders to release native memory.
+   */
+  dispose(): void {
+    for (const encoder of this.encoders.values()) {
+      encoder.free();
+    }
+    this.encoders.clear();
+  }
+
   getStrengthPatterns(): Record<string, string[]> {
     return this.strengthPatterns;
   }
@@ -705,10 +715,14 @@ export class StaticAnalyzer {
         this.validatePromptFrontmatter(fm, fmRange, results);
         break;
       case 'instructions':
+      case 'copilot-instructions':
         this.validateInstructionsFrontmatter(fm, fmRange, results);
         break;
       case 'skill':
         this.validateSkillFrontmatter(fm, fmRange, results);
+        break;
+      case 'agents-md':
+        this.validateAgentFrontmatter(fm, fmRange, results);
         break;
     }
 

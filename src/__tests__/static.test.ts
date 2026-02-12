@@ -1,60 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { StaticAnalyzer } from '../analyzers/static';
-import { PromptDocument } from '../types';
-
-/**
- * Helper to build a PromptDocument from text content.
- */
-function makeDoc(text: string): PromptDocument {
-  const lines = text.split('\n');
-  const variables = new Map<string, number[]>();
-  const variablePattern = /\{\{(\w+)\}\}/g;
-
-  lines.forEach((line, lineIndex) => {
-    let match;
-    while ((match = variablePattern.exec(line)) !== null) {
-      const varName = match[1];
-      const positions = variables.get(varName) || [];
-      positions.push(lineIndex);
-      variables.set(varName, positions);
-    }
-  });
-
-  const sections: { name: string; startLine: number; endLine: number }[] = [];
-  let currentSection: { name: string; startLine: number } | null = null;
-
-  lines.forEach((line, lineIndex) => {
-    const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (headerMatch) {
-      if (currentSection !== null) {
-        sections.push({
-          name: currentSection.name,
-          startLine: currentSection.startLine,
-          endLine: lineIndex - 1,
-        });
-      }
-      currentSection = { name: headerMatch[2], startLine: lineIndex };
-    }
-  });
-
-  if (currentSection !== null) {
-    sections.push({
-      name: (currentSection as { name: string; startLine: number }).name,
-      startLine: (currentSection as { name: string; startLine: number }).startLine,
-      endLine: lines.length - 1,
-    });
-  }
-
-  return {
-    uri: 'file:///test.prompt.md',
-    text,
-    lines,
-    variables,
-    sections,
-    compositionLinks: [],
-    fileType: 'prompt' as const,
-  };
-}
+import { makeDoc } from './helpers';
 
 describe('StaticAnalyzer', () => {
   let analyzer: StaticAnalyzer;
@@ -297,6 +243,48 @@ describe('StaticAnalyzer', () => {
       const short = analyzer.getTokenCount('Hello');
       const long = analyzer.getTokenCount('Hello world, this is a much longer sentence with many more tokens.');
       expect(long).toBeGreaterThan(short);
+    });
+  });
+
+  describe('dispose', () => {
+    it('should free encoders without error', () => {
+      // Trigger encoder creation
+      analyzer.getTokenCount('test');
+      expect(() => analyzer.dispose()).not.toThrow();
+    });
+
+    it('should allow re-creation after dispose', () => {
+      analyzer.getTokenCount('test');
+      analyzer.dispose();
+      // Should create a new encoder
+      const count = analyzer.getTokenCount('Hello again');
+      expect(count).toBeGreaterThan(0);
+    });
+  });
+
+  describe('frontmatter validation for special file types', () => {
+    it('should validate copilot-instructions frontmatter', () => {
+      const doc = makeDoc('---\ndescription: test\nunknownField: value\n---\n# Content', {
+        uri: 'file:///workspace/copilot-instructions.md',
+        fileType: 'copilot-instructions',
+        frontmatter: { description: 'test', unknownField: 'value' },
+        frontmatterRange: { startLine: 0, endLine: 3 },
+      });
+      const results = analyzer.analyze(doc);
+      const unknown = results.find(r => r.code === 'unknown-frontmatter-field');
+      expect(unknown).toBeDefined();
+    });
+
+    it('should validate agents-md frontmatter', () => {
+      const doc = makeDoc('---\ndescription: test\n---\n# Content', {
+        uri: 'file:///workspace/agents.md',
+        fileType: 'agents-md',
+        frontmatter: { description: 'test' },
+        frontmatterRange: { startLine: 0, endLine: 2 },
+      });
+      const results = analyzer.analyze(doc);
+      // Should not crash; agents-md now routes to agent validation
+      expect(Array.isArray(results)).toBe(true);
     });
   });
 });

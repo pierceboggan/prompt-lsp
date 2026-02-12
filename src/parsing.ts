@@ -98,14 +98,16 @@ export function resolveLinkPath(target: string, documentDir?: string, workspaceR
     resolved = path.resolve(documentDir, target);
   }
 
-  // When workspaceRoot is provided, enforce containment; when absent, deny absolute paths as a safe default
+  // When workspaceRoot is provided, enforce containment; when absent, restrict to documentDir
   if (resolved && workspaceRoot) {
     if (!isWithinDirectory(resolved, workspaceRoot)) {
       return undefined;
     }
-  } else if (resolved && path.isAbsolute(target)) {
-    // No workspace root to validate against — deny absolute paths
-    return undefined;
+  } else if (resolved) {
+    // No workspace root — restrict to documentDir to prevent traversal
+    if (!isWithinDirectory(resolved, documentDir)) {
+      return undefined;
+    }
   }
 
   return resolved;

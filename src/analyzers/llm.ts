@@ -1,5 +1,16 @@
 import fs from 'fs';
-import { PromptDocument, AnalysisResult, LLMProxyFn } from '../types';
+import {
+  PromptDocument,
+  AnalysisResult,
+  LLMProxyFn,
+  LLMContradictionResponse,
+  LLMAmbiguityResponse,
+  LLMPersonaResponse,
+  LLMCognitiveLoadResponse,
+  LLMOutputShapeResponse,
+  LLMCoverageResponse,
+  LLMCompositionConflictResponse,
+} from '../types';
 
 /**
  * LLM-powered analyzer for semantic analysis that can't be done statically.
@@ -17,12 +28,11 @@ export class LLMAnalyzer {
   /**
    * Extract JSON from an LLM response that may be wrapped in markdown code fences.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private extractJSON(text: string): any {
+  private extractJSON<T>(text: string): T {
     // Strip markdown code fences: ```json ... ``` or ``` ... ```
     const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
     const jsonStr = fenceMatch ? fenceMatch[1].trim() : text.trim();
-    return JSON.parse(jsonStr);
+    return JSON.parse(jsonStr) as T;
   }
 
   /**
@@ -132,7 +142,7 @@ If no issues found, return {"issues": []}`;
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = this.extractJSON(response);
+      const parsed = this.extractJSON<LLMAmbiguityResponse>(response);
       for (const issue of parsed.issues || []) {
         const line = this.findLineNumber(doc, issue.text);
         results.push({
@@ -191,7 +201,7 @@ If no contradictions found, return {"contradictions": []}`;
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = this.extractJSON(response);
+      const parsed = this.extractJSON<LLMContradictionResponse>(response);
       for (const contradiction of parsed.contradictions || []) {
         // Find actual line numbers by searching for the instruction text
         const line1 = this.findLineNumber(doc, contradiction.instruction1);
@@ -264,7 +274,7 @@ If no issues found, return {"issues": []}`;
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = this.extractJSON(response);
+      const parsed = this.extractJSON<LLMPersonaResponse>(response);
       for (const issue of parsed.issues || []) {
         results.push({
           code: 'persona-inconsistency',
@@ -320,7 +330,7 @@ Respond in JSON format:
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = this.extractJSON(response);
+      const parsed = this.extractJSON<LLMCognitiveLoadResponse>(response);
       
       if (parsed.overall_complexity === 'very-high') {
         results.push({
@@ -400,7 +410,7 @@ Respond in JSON format:
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = this.extractJSON(response);
+      const parsed = this.extractJSON<LLMOutputShapeResponse>(response);
       const predictions = parsed.predictions;
 
       if (predictions) {
@@ -525,7 +535,7 @@ Respond in JSON format:
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = this.extractJSON(response);
+      const parsed = this.extractJSON<LLMCoverageResponse>(response);
       const analysis = parsed.coverage_analysis;
 
       if (analysis) {
@@ -639,7 +649,7 @@ If no conflicts found, return {"conflicts": []}`;
     const results: AnalysisResult[] = [];
 
     try {
-      const parsed = this.extractJSON(response);
+      const parsed = this.extractJSON<LLMCompositionConflictResponse>(response);
       for (const conflict of parsed.conflicts || []) {
         results.push({
           code: 'composition-conflict',

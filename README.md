@@ -3,95 +3,89 @@
 [![CI](https://github.com/pierceboggan/prompt-lsp/actions/workflows/ci.yml/badge.svg)](https://github.com/pierceboggan/prompt-lsp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Language Server Protocol implementation for analyzing, validating, and improving AI prompts.
+A Language Server Protocol implementation for analyzing, validating, and improving AI prompt files. Works with `.prompt.md`, `.agent.md`, `.system.md`, `.instructions.md`, and skill files — providing real-time diagnostics, token counting, and LLM-powered semantic analysis directly in VS Code.
 
 ## Features
 
-### Tier 1: Critical Impact
-- **Contradiction Detection** - LLM-powered semantic conflict analysis
-- **Prompt Injection Surface Analysis** - Detects injection vectors and suggests delimiters
-- **Instruction Strength & Positioning** - Warns about weak language in critical constraints, recency bias
-- **Variable/Placeholder Validation** - Identifies undefined `{{variables}}`
-- **Ambiguity Detection** - Flags vague quantifiers, unresolved references, undefined terms
+### Static Analysis (instant, every keystroke)
 
-### Tier 2: High Impact
-- **Safety Guardrail Integrity** - LLM analysis of jailbreak vulnerabilities
-- **Output Shape Prediction** - Token estimates, format compliance, refusal rate
-- **Persona Consistency** - Detects conflicting personality traits/tone drift
-- **Cognitive Load Assessment** - Warns about overly complex prompts
+- **Variable/Placeholder Validation** — Flags undefined `{{variables}}` and empty placeholders
+- **Instruction Strength** — Warns when critical constraints use weak language ("try to", "consider")
+- **Ambiguity Detection** — Catches vague quantifiers ("a few"), unresolved references ("as mentioned above"), and undefined terms
+- **Structure & Style Linting** — Detects mixed XML/Markdown conventions and unclosed XML tags
+- **Redundancy Detection** — Finds duplicate instructions and subsumed constraints
+- **Example Sufficiency** — Warns when output format is specified but no examples are provided
+- **Token Counting** — Accurate token counts via [tiktoken](https://github.com/openai/tiktoken), with per-section breakdowns and context window budget warnings
+- **Frontmatter Validation** — File-type-aware validation for agent, prompt, instructions, and skill frontmatter fields
+- **Composition Link Checking** — Validates that markdown links to other prompt files resolve correctly
 
-### Tier 3: Medium Impact
-- **Tokenization Awareness** - Accurate token counting via tiktoken
-- **Semantic Coverage Analysis** - LLM identifies coverage gaps/edge cases
-- **Example Sufficiency Analysis** - Checks for missing/mismatched examples
-- **Redundancy Detection** - Finds duplicate or subsumed constraints
+### LLM-Powered Analysis (on save, via GitHub Copilot)
+
+- **Contradiction Detection** — Finds logical, behavioral, and format conflicts
+- **Semantic Ambiguity** — Deeper ambiguity analysis with rewrite suggestions
+- **Persona Consistency** — Detects conflicting personality traits and tone drift
+- **Cognitive Load Assessment** — Warns about overly complex prompts with too many nested conditions
+- **Output Shape Prediction** — Predicts response length, format compliance, and refusal probability
+- **Semantic Coverage** — Identifies gaps in intent handling and missing error paths
+- **Composition Conflict Analysis** — Detects conflicts across linked/composed prompt files
+
+### Editor Integration
+
+- **CodeLens** — Issue count and per-section token counts displayed inline
+- **Hover Information** — Variable details and instruction strength explanations on hover
+- **Quick Fixes** — One-click fixes for ambiguous quantifiers, weak instructions, empty variables, and missing frontmatter
+- **Go to Definition** — Navigate to variable definitions and linked prompt files
+- **Document Symbols** — Outline view of prompt sections
+- **Status Bar** — Live token count in the status bar
+
+## Supported File Types
+
+| Pattern | Type |
+|---|---|
+| `*.agent.md` | Agent |
+| `*.prompt.md` | Prompt |
+| `*.system.md` | System prompt |
+| `*.instructions.md` | Instructions |
+| `agents.md` | Agents config |
+| `copilot-instructions.md` | Copilot instructions |
+| `**/skills/**/SKILL.md` | Skill |
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/pierceboggan/prompt-lsp.git
 cd prompt-lsp
-
-# Install dependencies
 npm install
-
-# Build
 npm run build
 ```
 
+Then press `F5` in VS Code to launch the Extension Development Host.
+
 ## Usage
 
-### VS Code Extension
-
-1. Open the project in VS Code
-2. Press `F5` to launch the Extension Development Host
-3. Open any `.prompt.md`, `.system.md`, or `.agent.md` file
-4. Diagnostics appear automatically on save/open
-
-### File Associations
-
-The extension automatically recognizes:
-- `*.prompt.md` - Prompt files
-- `*.system.md` - System prompts
-- `*.agent.md` - Agent prompts
-- `*.prompt` - Generic prompt files
-- `**/skills/**/*.md` - Skill markdown files
+1. Open any supported prompt file in VS Code
+2. **Static diagnostics** appear instantly as you type
+3. **LLM diagnostics** run automatically on save (requires GitHub Copilot)
+4. Use the **Problems panel** (`Ctrl+Shift+M`) to see all issues
 
 ### Commands
 
-- **Prompt LSP: Analyze Prompt** - Force re-analysis
-- **Prompt LSP: Show Token Count** - Display token count
-- **Prompt LSP: Clear Analysis Cache** - Clear cached results
+| Command | Description |
+|---------|-------------|
+| `Prompt LSP: Analyze Prompt` | Force full re-analysis (including LLM) |
+| `Prompt LSP: Show Token Count` | Show accurate token count for the active file |
+| `Prompt LSP: Clear Analysis Cache` | Clear cached analysis results |
 
-### Accessibility
-
-All diagnostics are surfaced through the standard VS Code Problems panel, which supports:
-- Screen reader announcements for new diagnostics
-- Keyboard navigation through all warnings and errors (`F8` / `Shift+F8`)
-- High-contrast theme compatibility for severity indicators
-- Hover tooltips with detailed explanations accessible via keyboard (`Ctrl+K Ctrl+I`)
-
-## Configuration
+### Configuration
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `promptLSP.enable` | `true` | Enable/disable extension |
-| `promptLSP.enableLLMAnalysis` | `true` | Enable LLM-powered analysis |
-| `promptLSP.llmProvider` | `openai` | LLM provider (`openai` or `anthropic`) |
-| `promptLSP.llmModel` | `gpt-4` | Model for LLM analysis |
-| `promptLSP.maxTokenBudget` | `4096` | Token budget warning threshold |
-| `promptLSP.targetModel` | `auto` | Target model for compatibility |
+| `promptLSP.enable` | `true` | Enable/disable the extension |
+| `promptLSP.trace.server` | `off` | Trace communication between VS Code and the language server |
 
 ### LLM Analysis
 
-For full semantic analysis (contradiction detection, safety analysis, etc.), set an API key:
-
-```bash
-export OPENAI_API_KEY=sk-...
-# or
-export ANTHROPIC_API_KEY=sk-ant-...
-```
+LLM-powered analysis uses **GitHub Copilot's `vscode.lm` API** — no API keys needed. Just sign in to GitHub Copilot in VS Code and the semantic analyses activate automatically.
 
 ## Architecture
 
@@ -100,84 +94,93 @@ export ANTHROPIC_API_KEY=sk-ant-...
 │                     Prompt Document                         │
 └─────────────────────────────────────────────────────────────┘
                               │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+┌──────────────────────────┐  ┌──────────────────────────────┐
+│  Layer 1: Static Analysis│  │ Layer 2: LLM Analysis        │
+│                          │  │                              │
+│  • Variables & structure │  │ • Contradictions & persona   │
+│  • Strength & ambiguity  │  │ • Coverage & output shape    │
+│  • Tokens & frontmatter  │  │ • Cognitive load & conflicts │
+│  • Composition links     │  │ • Composition conflicts      │
+│                          │  │                              │
+│  Runs: every keystroke   │  │ Runs: on save                │
+│  Cost: free              │  │ Cost: Copilot subscription   │
+└──────────────────────────┘  └──────────────────────────────┘
+                    │                   │
+                    └─────────┬─────────┘
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   Layer 1: Static Analysis                  │
-│  • Variable validation       • Instruction strength         │
-│  • Token counting            • Structure linting            │
-│  • Injection detection       • Ambiguity detection          │
-│                                                             │
-│  Latency: <10ms              Cost: Free                     │
+│                     Analysis Cache                          │
+│  Content-hash keyed • TTL-based expiry • 100 entry max     │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                Layer 2: LLM-Powered Analysis                │
-│  • Contradiction detection   • Ambiguity analysis           │
-│  • Persona consistency       • Safety scoring               │
-│  • Output prediction         • Semantic coverage            │
-│                                                             │
-│  Latency: 1-3s (cached)      Cost: Moderate                 │
+│                       LSP Interface                         │
+│  Diagnostics • CodeLens • Hover • Quick Fixes • Go-to-Def  │
 └─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                        LSP Cache                            │
-│  • Content-hash keyed        • TTL-based expiry             │
-└─────────────────────────────────────────────────────────────┘
+```
+
+For a deeper walkthrough, see [How It Works](docs/HOW_IT_WORKS.md).
+
+## Project Structure
+
+```
+src/
+├── server.ts              # LSP server entry point, document lifecycle, diagnostics
+├── types.ts               # Shared TypeScript types and interfaces
+├── cache.ts               # Content-hash analysis cache with TTL
+├── parsing.ts             # Document parsing, frontmatter, composition links
+├── lspFeatures.ts         # CodeLens, Go-to-Definition, variable lookup helpers
+├── analyzers/
+│   ├── static.ts          # All static analysis rules
+│   └── llm.ts             # All LLM-powered analysis rules
+└── __tests__/
+    ├── static.test.ts     # Static analyzer tests
+    ├── llm.test.ts        # LLM analyzer tests
+    ├── cache.test.ts      # Cache tests
+    ├── parsing.test.ts    # Parsing tests
+    └── lspFeatures.test.ts # LSP features tests
+
+client/
+├── src/extension.ts       # VS Code extension activation, LLM proxy, status bar
+├── syntaxes/              # TextMate grammar for syntax highlighting
+└── package.json           # Extension manifest with configuration schema
+
+examples/                  # Sample prompt files for manual testing
+docs/                      # Design specs and guides
 ```
 
 ## Development
 
 ```bash
-# Watch mode (server)
-npm run watch
-
-# Watch mode (client)
-cd client && npm run watch
-
-# Run tests
-npm test
-
-# Debug in VS Code
-# Press F5 with launch.json configured
+npm run compile      # Build server only
+npm run build        # Build server + client
+npm test             # Run tests (vitest)
+npx vitest           # Run tests in watch mode
+npm run watch        # Watch server changes
+npm run lint         # Run ESLint
 ```
 
-## Project Structure
+Press `F5` in VS Code to launch the Extension Development Host for manual testing.
 
-```
-prompt-lsp/
-├── src/
-│   ├── server.ts          # LSP server entry point
-│   ├── types.ts           # Type definitions
-│   ├── cache.ts           # Content-hash caching
-│   └── analyzers/
-│       ├── static.ts      # Static analysis (fast)
-│       └── llm.ts         # LLM-powered analysis
-├── client/
-│   ├── src/
-│   │   └── extension.ts   # VS Code extension
-│   ├── syntaxes/          # Syntax highlighting
-│   └── package.json       # Extension manifest
-├── examples/
-│   └── sample.prompt.md   # Example prompt file
-└── out/                   # Compiled output
-```
+## Documentation
+
+- [How It Works](docs/HOW_IT_WORKS.md) — Detailed walkthrough of the analysis pipeline
+- [Design Specification](docs/SPEC.md) — Full analysis tier details and design decisions
+- [Contributing Guide](CONTRIBUTING.md) — How to set up, build, test, and contribute
+- [Agent Prompts Guide](docs/agents.md) — Best practices for writing `.agent.md` files
+
+## Examples
+
+The `examples/` directory contains sample prompt files for testing:
+
+- [`sample.prompt.md`](examples/sample.prompt.md) — A well-structured prompt demonstrating common patterns
+- [`problematic.agent.md`](examples/problematic.agent.md) — An intentionally flawed prompt that triggers many diagnostics
+- [`self-verification.agent.md`](examples/self-verification.agent.md) — Self-verification pattern for agents
+- [`tdd.agent.md`](examples/tdd.agent.md) — TDD workflow agent
 
 ## License
 
 MIT
-
-## Documentation
-
-- [Contributing Guide](CONTRIBUTING.md) — How to set up, build, test, and contribute
-- [Agent Prompts Guide](docs/agents.md) — Best practices for writing `.agent.md` files
-- [Design Specification](docs/SPEC.md) — Architecture and analysis tier details
-
-## Examples
-
-The `examples/` directory contains sample prompt files:
-
-- [`sample.prompt.md`](examples/sample.prompt.md) — A well-structured prompt demonstrating common patterns
-- [`problematic.agent.md`](examples/problematic.agent.md) — An intentionally flawed prompt that triggers many diagnostics
-- [`self-verification.agent.md`](examples/self-verification.agent.md) — An agent prompt demonstrating self-verification (checking its own output before responding)

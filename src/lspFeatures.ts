@@ -1,4 +1,4 @@
-import { CodeLens } from 'vscode-languageserver/node';
+import { CodeLens, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 
 import { StaticAnalyzer } from './analyzers/static';
 import { AnalysisResult, CompositionLink, PromptDocument } from './types';
@@ -90,4 +90,35 @@ export function createCodeLenses(
   }
 
   return codeLenses;
+}
+
+/**
+ * Convert analysis results to LSP diagnostics.
+ */
+export function resultsToDiagnostics(results: AnalysisResult[]): Diagnostic[] {
+  return results.map((result) => {
+    let severity: DiagnosticSeverity;
+    switch (result.severity) {
+      case 'error':
+        severity = DiagnosticSeverity.Error;
+        break;
+      case 'warning':
+        severity = DiagnosticSeverity.Warning;
+        break;
+      case 'info':
+        severity = DiagnosticSeverity.Information;
+        break;
+      default:
+        severity = DiagnosticSeverity.Hint;
+    }
+
+    return {
+      severity,
+      range: result.range,
+      message: result.message,
+      source: `prompt-lsp (${result.analyzer})`,
+      code: result.code,
+      data: result.suggestion,
+    };
+  });
 }
