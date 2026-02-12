@@ -40,3 +40,6 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Lint
+        run: npm run lint

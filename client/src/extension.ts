@@ -120,12 +120,20 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('promptLSP.showTokenCount', async () => {
       const editor = vscode.window.activeTextEditor;
       if (editor) {
-        const text = editor.document.getText();
-        // Rough estimation: ~4 characters per token for English
-        const estimatedTokens = Math.ceil(text.length / 4);
-        vscode.window.showInformationMessage(
-          `Estimated tokens: ~${estimatedTokens} (${text.length} characters)`
-        );
+        try {
+          const count = await client.sendRequest<number>('promptLSP/tokenCount', {
+            uri: editor.document.uri.toString(),
+          });
+          vscode.window.showInformationMessage(
+            `Token count: ${count} (${editor.document.getText().length} characters)`
+          );
+        } catch {
+          const text = editor.document.getText();
+          const estimatedTokens = Math.ceil(text.length / 4);
+          vscode.window.showInformationMessage(
+            `Estimated tokens: ~${estimatedTokens} (${text.length} characters)`
+          );
+        }
       }
     })
   );
@@ -147,6 +155,8 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(tokenStatusBar);
 
   // Update token count on active editor change
+  let tokenUpdateTimer: ReturnType<typeof setTimeout> | undefined;
+
   const updateTokenCount = () => {
     const editor = vscode.window.activeTextEditor;
     if (editor && isPromptDocument(editor.document)) {
@@ -155,6 +165,22 @@ export function activate(context: vscode.ExtensionContext) {
       tokenStatusBar.text = `$(symbol-number) ~${estimatedTokens} tokens`;
       tokenStatusBar.tooltip = 'Estimated token count (click for details)';
       tokenStatusBar.show();
+
+      // Debounced accurate token count via LSP
+      if (tokenUpdateTimer) clearTimeout(tokenUpdateTimer);
+      tokenUpdateTimer = setTimeout(async () => {
+        try {
+          const count = await client.sendRequest<number>('promptLSP/tokenCount', {
+            uri: editor.document.uri.toString(),
+          });
+          if (vscode.window.activeTextEditor?.document === editor.document) {
+            tokenStatusBar.text = `$(symbol-number) ${count} tokens`;
+            tokenStatusBar.tooltip = 'Token count via tiktoken (click for details)';
+          }
+        } catch {
+          // Server not ready or request failed, keep estimate
+        }
+      }, 300);
     } else {
       tokenStatusBar.hide();
     }
@@ -257,15 +283,19 @@ async function handleLLMProxyRequest(request: LLMProxyRequest): Promise<LLMProxy
 
     // Send the request
     const tokenSource = new vscode.CancellationTokenSource();
-    const response = await model.sendRequest(messages, {}, tokenSource.token);
+    try {
+      const response = await model.sendRequest(messages, {}, tokenSource.token);
 
-    // Collect the streamed response
-    let text = '';
-    for await (const part of response.text) {
-      text += part;
+      // Collect the streamed response
+      let text = '';
+      for await (const part of response.text) {
+        text += part;
+      }
+
+      return { text };
+    } finally {
+      tokenSource.dispose();
     }
-
-    return { text };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     outputChannel.appendLine(`[LLM Proxy] Error: ${message}`);

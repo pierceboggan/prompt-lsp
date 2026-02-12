@@ -14,6 +14,18 @@ export class StaticAnalyzer {
   
   private vagueTerms = ['appropriate', 'professional', 'good', 'bad', 'nice', 'proper', 'suitable', 'reasonable', 'adequate'];
 
+  private quantifierSuggestions: Record<string, string> = {
+    'a few': '2-3',
+    'some': 'specific',
+    'sometimes': 'in specific cases',
+    'occasionally': 'in ~10% of cases',
+    'often': 'in most cases',
+    'many': '10+',
+    'several': '5-7',
+    'various': 'the following specific',
+    'numerous': '10+',
+  };
+
   // Model context window sizes
   private contextWindows: Record<string, number> = {
     'gpt-3.5-turbo': 4096,
@@ -27,8 +39,8 @@ export class StaticAnalyzer {
     'claude-3-haiku': 200000,
   };
 
-  // Tiktoken encoder cached
-  private encoder: ReturnType<typeof encoding_for_model> | null = null;
+  // Tiktoken encoders cached per model
+  private encoders: Map<string, ReturnType<typeof encoding_for_model>> = new Map();
 
   getStrengthPatterns(): Record<string, string[]> {
     return this.strengthPatterns;
@@ -39,17 +51,19 @@ export class StaticAnalyzer {
    */
   getTokenCount(text: string, model: string = 'gpt-4'): number {
     try {
-      if (!this.encoder) {
-        // Map model to tiktoken model name
-        let tiktokenModel: TiktokenModel = 'gpt-4';
-        if (model.includes('gpt-3.5')) {
-          tiktokenModel = 'gpt-3.5-turbo';
-        } else if (model.includes('gpt-4')) {
-          tiktokenModel = 'gpt-4';
-        }
-        this.encoder = encoding_for_model(tiktokenModel);
+      // Map model to tiktoken model name
+      let tiktokenModel: TiktokenModel = 'gpt-4';
+      if (model.includes('gpt-3.5')) {
+        tiktokenModel = 'gpt-3.5-turbo';
+      } else if (model.includes('gpt-4')) {
+        tiktokenModel = 'gpt-4';
       }
-      return this.encoder.encode(text).length;
+      let encoder = this.encoders.get(tiktokenModel);
+      if (!encoder) {
+        encoder = encoding_for_model(tiktokenModel);
+        this.encoders.set(tiktokenModel, encoder);
+      }
+      return encoder.encode(text).length;
     } catch {
       // Fallback to estimation
       return Math.ceil(text.length / 4);
@@ -281,6 +295,7 @@ export class StaticAnalyzer {
               end: { line: lineIndex, character: match.index + match[0].length },
             },
             analyzer: 'ambiguity-detection',
+            suggestion: this.quantifierSuggestions[match[0].toLowerCase()],
           });
         }
       }

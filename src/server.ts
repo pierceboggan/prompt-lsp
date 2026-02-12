@@ -19,14 +19,14 @@ import {
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 
 import { StaticAnalyzer } from './analyzers/static';
 import { LLMAnalyzer } from './analyzers/llm';
 import { AnalysisCache } from './cache';
-import { PromptDocument, PromptFileType, AnalysisResult, CompositionLink, LLMProxyRequest, LLMProxyResponse } from './types';
+import { parsePromptDocument } from './parsing';
+import { PromptDocument, AnalysisResult, LLMProxyRequest, LLMProxyResponse } from './types';
 import {
   createCodeLenses,
   findCompositionLinkAtPosition,
@@ -50,6 +50,9 @@ const llmDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
 const recentlyOpened: Set<string> = new Set();
 const documentVersions: Map<string, number> = new Map();
 const LLM_DEBOUNCE_DELAY = 2000; // ms - longer delay for LLM to avoid excessive API calls
+
+// Parse cache: avoids re-parsing on every CodeLens/Hover/Definition request
+const parsedDocumentCache: Map<string, { version: number; doc: PromptDocument }> = new Map();
 
 let workspaceRoot: string | undefined;
 
@@ -209,8 +212,20 @@ documents.onDidOpen((event) => {
 });
 
 // Run quick static analysis only (fast, on keystroke — no token counting or FS access)
+function getCachedPromptDocument(textDocument: TextDocument): PromptDocument {
+  const uri = textDocument.uri;
+  const version = textDocument.version;
+  const cached = parsedDocumentCache.get(uri);
+  if (cached && cached.version === version) {
+    return cached.doc;
+  }
+  const doc = parsePromptDocument({ uri, text: textDocument.getText(), workspaceRoot });
+  parsedDocumentCache.set(uri, { version, doc });
+  return doc;
+}
+
 async function runStaticAnalysis(textDocument: TextDocument): Promise<void> {
-  const promptDoc = parsePromptDocument(textDocument);
+  const promptDoc = getCachedPromptDocument(textDocument);
   const staticResults = staticAnalyzer.analyzeQuick(promptDoc);
 
   lastStaticAnalysisResults.set(textDocument.uri, staticResults);
@@ -228,7 +243,7 @@ async function runFullAnalysis(textDocument: TextDocument): Promise<void> {
   documentVersions.set(uri, version);
 
   connection.console.log(`[Analysis] Running full analysis on ${uri}`);
-  const promptDoc = parsePromptDocument(textDocument);
+  const promptDoc = getCachedPromptDocument(textDocument);
   const contentHash = await computeCompositeHash(textDocument, promptDoc);
 
   // Discard if document changed since analysis started
@@ -299,222 +314,6 @@ async function computeCompositeHash(textDocument: TextDocument, promptDoc: Promp
   return cache.computeHash(compositeText);
 }
 
-// Parse text document into prompt document structure
-function parsePromptDocument(textDocument: TextDocument): PromptDocument {
-  const text = textDocument.getText();
-  const lines = text.split('\n');
-
-  // Extract variables like {{variable_name}}
-  const variables: Map<string, number[]> = new Map();
-  const variablePattern = /\{\{(\w+)\}\}/g;
-
-  lines.forEach((line, lineIndex) => {
-    let match;
-    while ((match = variablePattern.exec(line)) !== null) {
-      const varName = match[1];
-      const positions = variables.get(varName) || [];
-      positions.push(lineIndex);
-      variables.set(varName, positions);
-    }
-  });
-
-  // Extract sections (markdown headers)
-  const sections: { name: string; startLine: number; endLine: number }[] = [];
-  let currentSection: { name: string; startLine: number } | null = null;
-
-  lines.forEach((line, lineIndex) => {
-    const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (headerMatch) {
-      if (currentSection !== null) {
-        sections.push({
-          name: currentSection.name,
-          startLine: currentSection.startLine,
-          endLine: lineIndex - 1,
-        });
-      }
-      currentSection = { name: headerMatch[2], startLine: lineIndex };
-    }
-  });
-
-  if (currentSection !== null) {
-    sections.push({
-      name: (currentSection as { name: string; startLine: number }).name,
-      startLine: (currentSection as { name: string; startLine: number }).startLine,
-      endLine: lines.length - 1,
-    });
-  }
-
-  const compositionLinks: CompositionLink[] = [];
-  const documentDir = getDocumentDir(textDocument.uri);
-  const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
-
-  lines.forEach((line, lineIndex) => {
-    let match;
-    while ((match = linkPattern.exec(line)) !== null) {
-      const rawTarget = match[2].trim();
-      const target = normalizeMarkdownLinkTarget(rawTarget);
-      if (!target) continue;
-
-      const targetWithoutAnchor = target.split('#')[0];
-      if (!targetWithoutAnchor) continue;
-
-      if (!isPromptFile(targetWithoutAnchor)) continue;
-
-      const resolvedPath = resolveLinkPath(targetWithoutAnchor, documentDir);
-      const openParenOffset = match[0].indexOf('(');
-      const targetStartColumn = match.index + (openParenOffset >= 0 ? openParenOffset + 1 : 0);
-      const targetEndColumn = targetStartColumn + match[2].length;
-      compositionLinks.push({
-        target: targetWithoutAnchor,
-        resolvedPath,
-        line: lineIndex,
-        column: match.index,
-        endColumn: match.index + match[0].length,
-        targetStartColumn,
-        targetEndColumn,
-      });
-    }
-  });
-
-  return {
-    uri: textDocument.uri,
-    text,
-    lines,
-    variables,
-    sections,
-    compositionLinks,
-    fileType: detectFileType(textDocument.uri),
-    ...parseFrontmatter(lines),
-  };
-}
-
-function detectFileType(uri: string): PromptFileType {
-  const lower = uri.toLowerCase();
-  const baseName = lower.split(/[\\/]/).pop() || '';
-  if (baseName === 'agents.md') return 'agents-md';
-  if (baseName === 'copilot-instructions.md') return 'copilot-instructions';
-  if (baseName === 'skill.md') return 'skill';
-  if (lower.endsWith('.agent.md')) return 'agent';
-  if (lower.endsWith('.prompt.md')) return 'prompt';
-  if (lower.endsWith('.system.md')) return 'system';
-  if (lower.endsWith('.instructions.md')) return 'instructions';
-  return 'unknown';
-}
-
-function parseFrontmatter(lines: string[]): { frontmatter?: Record<string, unknown>; frontmatterRange?: { startLine: number; endLine: number } } {
-  if (lines.length === 0 || lines[0].trim() !== '---') {
-    return {};
-  }
-
-  let endLine = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === '---') {
-      endLine = i;
-      break;
-    }
-  }
-
-  if (endLine === -1) {
-    return {};
-  }
-
-  const frontmatterLines = lines.slice(1, endLine);
-  const frontmatter: Record<string, unknown> = {};
-
-  for (const line of frontmatterLines) {
-    const match = line.match(/^(\w[\w-]*):\s*(.*)/);
-    if (match) {
-      const key = match[1];
-      let value: unknown = match[2].trim();
-
-      // Parse arrays (simple YAML list on single line)
-      if (typeof value === 'string' && value.startsWith('[') && value.endsWith(']')) {
-        try {
-          value = JSON.parse(value);
-        } catch {
-          // Keep as string
-        }
-      }
-      // Parse booleans
-      if (value === 'true') value = true;
-      if (value === 'false') value = false;
-
-      frontmatter[key] = value;
-    }
-  }
-
-  return {
-    frontmatter: Object.keys(frontmatter).length > 0 ? frontmatter : undefined,
-    frontmatterRange: { startLine: 0, endLine },
-  };
-}
-
-function getDocumentDir(uri: string): string | undefined {
-  try {
-    const filePath = fileURLToPath(uri);
-    return path.dirname(filePath);
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeMarkdownLinkTarget(target: string): string | undefined {
-  let cleaned = target.trim();
-
-  if (cleaned.startsWith('<') && cleaned.endsWith('>')) {
-    cleaned = cleaned.slice(1, -1).trim();
-  }
-
-  if (!cleaned || cleaned.startsWith('#')) {
-    return undefined;
-  }
-
-  if (/^(https?:|mailto:)/i.test(cleaned)) {
-    return undefined;
-  }
-
-  const match = cleaned.match(/^([^\s]+)(?:\s+['"][^'"]*['"])?$/);
-  return match ? match[1] : cleaned;
-}
-
-function resolveLinkPath(target: string, documentDir?: string): string | undefined {
-  if (!documentDir) return undefined;
-
-  if (target.startsWith('file://')) {
-    try {
-      return fileURLToPath(target);
-    } catch {
-      return undefined;
-    }
-  }
-
-  if (path.isAbsolute(target)) {
-    return target;
-  }
-
-  return path.resolve(documentDir, target);
-}
-
-function isPromptFile(target: string): boolean {
-  const lower = target.toLowerCase();
-  const baseName = lower.split(/[\/]/).pop() || '';
-  return (
-    lower.endsWith('.prompt.md') ||
-    lower.endsWith('.system.md') ||
-    lower.endsWith('.agent.md') ||
-    lower.endsWith('.instructions.md') ||
-    baseName === 'agents.md' ||
-    baseName === 'copilot-instructions.md' ||
-    isSkillMarkdownPath(lower)
-  );
-}
-
-function isSkillMarkdownPath(target: string): boolean {
-  if (!target.endsWith('.md')) return false;
-  return /(^|[\/])\.?(github|claude)[\/]skills[\/]/.test(target) ||
-         /(^|[\/])skills[\/]/.test(target);
-}
-
 // Convert analysis results to LSP diagnostics
 function resultsTodiagnostics(results: AnalysisResult[]): Diagnostic[] {
   return results.map((result) => {
@@ -549,7 +348,7 @@ connection.onDefinition((params) => {
   const document = documents.get(params.textDocument.uri);
   if (!document) return null;
 
-  const promptDoc = parsePromptDocument(document);
+  const promptDoc = getCachedPromptDocument(document);
   const position = params.position;
   const lineText = promptDoc.lines[position.line] ?? '';
 
@@ -588,7 +387,7 @@ connection.onCodeLens((params) => {
   const document = documents.get(params.textDocument.uri);
   if (!document) return [];
 
-  const promptDoc = parsePromptDocument(document);
+  const promptDoc = getCachedPromptDocument(document);
 
   return createCodeLenses(
     promptDoc,
@@ -669,10 +468,24 @@ connection.onCodeAction((params) => {
   const codeActions: CodeAction[] = [];
 
   for (const diagnostic of params.context.diagnostics) {
-    if (diagnostic.source?.startsWith('prompt-lsp') && diagnostic.data) {
+    if (!diagnostic.source?.startsWith('prompt-lsp')) continue;
+
+    // Suggestion-based quick fix (from diagnostic.data)
+    if (diagnostic.data) {
       const suggestion = diagnostic.data as string;
-      const action: CodeAction = {
-        title: `Fix: ${suggestion}`,
+      let title: string;
+      switch (diagnostic.code) {
+        case 'ambiguous-quantifier':
+          title = `Replace with "${suggestion}"`;
+          break;
+        case 'weak-instruction':
+          title = `Strengthen to "${suggestion}"`;
+          break;
+        default:
+          title = `Fix: ${suggestion}`;
+      }
+      codeActions.push({
+        title,
         kind: CodeActionKind.QuickFix,
         diagnostics: [diagnostic],
         edit: {
@@ -683,8 +496,58 @@ connection.onCodeAction((params) => {
             ),
           ],
         },
-      };
-      codeActions.push(action);
+      });
+    }
+
+    // Code-specific actions
+    switch (diagnostic.code) {
+      case 'empty-variable':
+        codeActions.push({
+          title: 'Remove empty placeholder',
+          kind: CodeActionKind.QuickFix,
+          diagnostics: [diagnostic],
+          edit: {
+            documentChanges: [
+              TextDocumentEdit.create(
+                { uri: params.textDocument.uri, version: document.version },
+                [TextEdit.replace(diagnostic.range, '')]
+              ),
+            ],
+          },
+        });
+        break;
+      case 'agent-missing-description': {
+        const insertLine = diagnostic.range.start.line + 1;
+        codeActions.push({
+          title: 'Add description field',
+          kind: CodeActionKind.QuickFix,
+          diagnostics: [diagnostic],
+          edit: {
+            documentChanges: [
+              TextDocumentEdit.create(
+                { uri: params.textDocument.uri, version: document.version },
+                [TextEdit.insert({ line: insertLine, character: 0 }, 'description: \n')]
+              ),
+            ],
+          },
+        });
+        break;
+      }
+      case 'skill-missing-frontmatter':
+        codeActions.push({
+          title: 'Add skill frontmatter',
+          kind: CodeActionKind.QuickFix,
+          diagnostics: [diagnostic],
+          edit: {
+            documentChanges: [
+              TextDocumentEdit.create(
+                { uri: params.textDocument.uri, version: document.version },
+                [TextEdit.insert({ line: 0, character: 0 }, '---\nname: \ndescription: \n---\n')]
+              ),
+            ],
+          },
+        });
+        break;
     }
   }
 
@@ -696,7 +559,7 @@ connection.onDocumentSymbol((params) => {
   const document = documents.get(params.textDocument.uri);
   if (!document) return [];
 
-  const promptDoc = parsePromptDocument(document);
+  const promptDoc = getCachedPromptDocument(document);
   return promptDoc.sections.map((section) => ({
     name: section.name,
     kind: 15, // SymbolKind.String (markdown section)
@@ -728,6 +591,25 @@ connection.onNotification('promptLSP/analyze', (params: { uri: string }) => {
   } else {
     connection.console.log(`[Analysis] No document found for ${params.uri}`);
   }
+});
+
+// Token count request for client status bar
+connection.onRequest('promptLSP/tokenCount', (params: { uri: string }): number => {
+  const document = documents.get(params.uri);
+  if (!document) return 0;
+  return staticAnalyzer.getTokenCount(document.getText());
+});
+
+// Clean up per-document state when documents are closed
+documents.onDidClose((event) => {
+  const uri = event.document.uri;
+  parsedDocumentCache.delete(uri);
+  lastStaticAnalysisResults.delete(uri);
+  documentVersions.delete(uri);
+  const timer = llmDebounceTimers.get(uri);
+  if (timer) clearTimeout(timer);
+  llmDebounceTimers.delete(uri);
+  recentlyOpened.delete(uri);
 });
 
 // Make the text document manager listen on the connection
