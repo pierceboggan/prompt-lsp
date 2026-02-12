@@ -111,6 +111,11 @@ describe('LLMAnalyzer', () => {
             severity: 'warning',
             explanation: 'These conflict',
           }],
+          ambiguity_issues: [],
+          persona_issues: [],
+          cognitive_load: { issues: [], overall_complexity: 'low' },
+          output_shape: { predictions: {}, warnings: [] },
+          coverage_analysis: {},
         }),
       });
       analyzer.setProxyFn(mockProxy);
@@ -165,7 +170,7 @@ describe('LLMAnalyzer', () => {
       const callPrompts: string[] = [];
       const mockProxy = vi.fn().mockImplementation(async (req: { prompt: string }) => {
         callPrompts.push(req.prompt);
-        return { text: '{"issues": [], "contradictions": [], "predictions": {}, "coverage_analysis": {}, "overall_complexity": "low"}' };
+        return { text: '{"contradictions": [], "ambiguity_issues": [], "persona_issues": [], "cognitive_load": {"issues": [], "overall_complexity": "low"}, "output_shape": {"predictions": {}, "warnings": []}, "coverage_analysis": {}}' };
       });
       analyzer.setProxyFn(mockProxy);
 
@@ -180,13 +185,18 @@ describe('LLMAnalyzer', () => {
     it('should produce persona inconsistency results', async () => {
       const mockProxy = vi.fn().mockResolvedValue({
         text: JSON.stringify({
-          issues: [{
+          contradictions: [],
+          ambiguity_issues: [],
+          persona_issues: [{
             description: 'Tone conflict',
             trait1: 'helpful',
             trait2: 'sarcastic',
             severity: 'warning',
             suggestion: 'Pick one tone',
           }],
+          cognitive_load: { issues: [], overall_complexity: 'low' },
+          output_shape: { predictions: {}, warnings: [] },
+          coverage_analysis: {},
         }),
       });
       analyzer.setProxyFn(mockProxy);
@@ -200,12 +210,17 @@ describe('LLMAnalyzer', () => {
     it('should produce ambiguity results from LLM', async () => {
       const mockProxy = vi.fn().mockResolvedValue({
         text: JSON.stringify({
-          issues: [{
+          contradictions: [],
+          ambiguity_issues: [{
             text: 'be professional',
             type: 'term',
             severity: 'info',
             suggestion: 'Define what professional means',
           }],
+          persona_issues: [],
+          cognitive_load: { issues: [], overall_complexity: 'low' },
+          output_shape: { predictions: {}, warnings: [] },
+          coverage_analysis: {},
         }),
       });
       analyzer.setProxyFn(mockProxy);

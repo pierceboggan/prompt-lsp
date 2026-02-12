@@ -105,7 +105,7 @@ For markdown links pointing to other prompt files (`.prompt.md`, `.agent.md`, et
 
 ## LLM Analysis Pipeline
 
-The LLM analyzer (`src/analyzers/llm.ts`) uses GitHub Copilot's `vscode.lm` API for semantic analysis. All seven analyses run **in parallel** using `Promise.allSettled` so partial results are preserved even if some fail.
+The LLM analyzer (`src/analyzers/llm.ts`) uses GitHub Copilot's `vscode.lm` API for semantic analysis. All six core analyses are performed in a **single LLM call** to minimize API usage. Composition conflict analysis (if the file has linked prompts) runs as a second call. Results from both calls are collected via `Promise.allSettled` so partial results are preserved if one fails.
 
 ### How LLM Calls Work
 
@@ -129,7 +129,7 @@ Each LLM prompt includes:
 | **Cognitive Load** | Nested conditions, priority conflicts, deep decision trees, constraint overload |
 | **Output Shape Prediction** | Expected response length, structured output compliance, refusal probability |
 | **Semantic Coverage** | Unhandled user intents, missing edge cases, absent error handling paths |
-| **Composition Conflicts** | Conflicts across the current file and directly linked prompt files |
+| **Composition Conflicts** | Conflicts across the current file and directly linked prompt files (separate LLM call) |
 
 ### Injection Defense
 

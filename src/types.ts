@@ -155,3 +155,19 @@ export interface LLMCompositionConflictResponse {
     suggestion: string;
   }[];
 }
+
+/** Combined LLM response for single-call analysis. */
+export interface LLMCombinedAnalysisResponse {
+  contradictions?: LLMContradictionResponse['contradictions'];
+  ambiguity_issues?: LLMAmbiguityResponse['issues'];
+  persona_issues?: LLMPersonaResponse['issues'];
+  cognitive_load?: {
+    issues?: LLMCognitiveLoadResponse['issues'];
+    overall_complexity?: LLMCognitiveLoadResponse['overall_complexity'];
+  };
+  output_shape?: {
+    predictions?: LLMOutputShapeResponse['predictions'];
+    warnings?: LLMOutputShapeResponse['warnings'];
+  };
+  coverage_analysis?: LLMCoverageResponse['coverage_analysis'];
+}
