@@ -190,8 +190,18 @@ export function activate(context: vscode.ExtensionContext) {
     }
   };
 
+  // Notify server of active document changes (LLM analysis only runs on active file)
+  const notifyActiveDocument = (editor: vscode.TextEditor | undefined) => {
+    if (editor && client.isRunning()) {
+      client.sendNotification('promptLSP/activeDocumentChanged', { uri: editor.document.uri.toString() });
+    }
+  };
+
   context.subscriptions.push(
-    vscode.window.onDidChangeActiveTextEditor(updateTokenCount)
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      updateTokenCount();
+      notifyActiveDocument(editor);
+    })
   );
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
@@ -213,7 +223,10 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   // Start the client
-  client.start();
+  client.start().then(() => {
+    // Send initial active document after client is ready
+    notifyActiveDocument(vscode.window.activeTextEditor);
+  });
 
   // Initial update
   updateTokenCount();

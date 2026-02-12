@@ -72,6 +72,9 @@ let serverConfig: ServerConfig = {
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 
+// Track the client's active document — LLM analysis only runs on the focused file
+let activeDocumentUri: string | undefined;
+
 // Store last STATIC analysis results per URI for CodeLens issue summary
 const lastStaticAnalysisResults: Map<string, AnalysisResult[]> = new Map();
 
@@ -278,9 +281,10 @@ async function runFullAnalysis(textDocument: TextDocument, options: { skipLLM: b
   // Store static results for CodeLens issue summary
   lastStaticAnalysisResults.set(uri, staticResults);
 
-  // Run LLM analysis (if enabled, available, and not skipped for keystroke path)
+  // Run LLM analysis (if enabled, available, not skipped, and document is the active editor)
   let llmResults: AnalysisResult[] = [];
-  if (!options.skipLLM && serverConfig.enableLLMAnalysis) {
+  const isActiveDocument = !activeDocumentUri || activeDocumentUri === uri;
+  if (!options.skipLLM && serverConfig.enableLLMAnalysis && isActiveDocument) {
     connection.console.log(`[Analysis] LLM available: ${llmAnalyzer.isAvailable()}`);
     llmResults = await llmAnalyzer.analyze(promptDoc);
     connection.console.log(`[Analysis] LLM: ${llmResults.length} issues`);
@@ -563,6 +567,12 @@ connection.onDocumentSymbol((params) => {
       end: { line: section.startLine, character: section.name.length + 2 },
     },
   }));
+});
+
+// Track the active document in the client editor
+connection.onNotification('promptLSP/activeDocumentChanged', (params: { uri: string }) => {
+  activeDocumentUri = params.uri;
+  connection.console.log(`[Active] Active document: ${params.uri}`);
 });
 
 // Handle clear cache notification from client

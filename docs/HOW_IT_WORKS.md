@@ -14,7 +14,7 @@ Analysis happens in two layers:
 | Layer | When it runs | Speed | Cost |
 |-------|-------------|-------|------|
 | **Static Analysis** | Every keystroke (quick subset) and after typing pauses (full) | < 10ms | Free |
-| **LLM Analysis** | On save and on open | 1–3s (cached) | GitHub Copilot subscription |
+| **LLM Analysis** | On save and on open (active file only) | 1–3s (cached) | GitHub Copilot subscription |
 
 ## Document Lifecycle
 
@@ -30,7 +30,7 @@ When you open a supported file (`.agent.md`, `.prompt.md`, etc.), the server:
    - **Variables** — All `{{variable_name}}` references with their line positions
    - **Composition links** — Markdown links to other prompt files (e.g., `[base](./base.prompt.md)`)
 
-3. **Runs full analysis** — Both static and LLM analysis run on open, and results are sent as LSP diagnostics.
+3. **Runs full analysis** — Both static and LLM analysis run on open (LLM only if this is the active editor), and results are sent as LSP diagnostics.
 
 ### 2. Typing (Content Changes)
 
@@ -40,7 +40,7 @@ On every keystroke:
 
 2. **After a 2-second typing pause**, full static analysis runs — this adds token counting (via tiktoken) and composition link validation (filesystem access to check linked files exist).
 
-3. **LLM analysis does NOT run on keystrokes** — it's too expensive. It only runs on save.
+3. **LLM analysis does NOT run on keystrokes** — it's too expensive. It only runs on save or open, and only for the currently focused file. Background files receive static analysis only.
 
 ### 3. File Saves
 
@@ -48,7 +48,7 @@ On save, the server runs the complete analysis pipeline:
 
 1. Compute a **composite content hash** — includes the file content plus the contents of any linked prompt files
 2. Check the **analysis cache** — if the hash matches a cached entry that hasn't expired (1-hour TTL), return cached results immediately
-3. On cache miss, run **static analysis** and **LLM analysis** in parallel
+3. On cache miss, run **static analysis** and (if this is the active file) **LLM analysis** in parallel
 4. Cache the combined results and send diagnostics
 
 ### 4. File Closes
