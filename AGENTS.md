@@ -86,7 +86,16 @@ The server recognizes these prompt file types (see `detectFileType` in `src/serv
 
 ## Configuration
 
-Extension settings are declared in `client/package.json` under `contributes.configuration`. Key settings include `promptLSP.enable`, `promptLSP.enableLLMAnalysis`, `promptLSP.llmProvider`, `promptLSP.llmModel`, `promptLSP.maxTokenBudget`, and `promptLSP.targetModel`.
+Extension settings are declared in `client/package.json` under `contributes.configuration`:
+
+- `promptLSP.enable` — Enable/disable the extension (default: `true`)
+- `promptLSP.trace.server` — Trace LSP communication (`off` | `messages` | `verbose`)
+
+Commands (available via Command Palette):
+
+- `Prompt LSP: Analyze Prompt` — Trigger full analysis (including LLM) on the active file
+- `Prompt LSP: Show Token Count` — Show accurate token count for the active file
+- `Prompt LSP: Clear Analysis Cache` — Invalidate all cached analysis results
 
 ## Dependencies
 
